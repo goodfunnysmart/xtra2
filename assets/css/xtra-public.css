@@ -1,0 +1,433 @@
+/* Xtra public grid — giving product, not a default WP table */
+
+.xtra {
+	--xtra-ink: #1a2330;
+	--xtra-muted: #5d6b7a;
+	--xtra-paper: #f6f3ec;
+	--xtra-card: #ffffff;
+	--xtra-line: #e4ddd0;
+	--xtra-forest: #1c6b49;
+	--xtra-forest-deep: #0e4a32;
+	--xtra-avail: #d9f0e3;
+	--xtra-avail-text: #0e4a32;
+	--xtra-pending: #f3e6c8;
+	--xtra-pending-text: #7a5a1e;
+	--xtra-taken: #eceae6;
+	--xtra-taken-text: #6a6f76;
+	--xtra-cta: #c45c26;
+	--xtra-cta-hover: #a44b1d;
+	--xtra-radius: 14px;
+	--xtra-shadow: 0 10px 30px rgba(26, 35, 48, 0.08);
+	box-sizing: border-box;
+	color: var(--xtra-ink);
+	font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+	max-width: 1100px;
+	margin: 0 auto 2.5rem;
+	background: var(--xtra-paper);
+	border: 1px solid var(--xtra-line);
+	border-radius: 20px;
+	padding: 1.5rem;
+}
+
+.xtra *,
+.xtra *::before,
+.xtra *::after {
+	box-sizing: border-box;
+}
+
+.xtra-banner {
+	border-radius: 12px;
+	padding: 0.9rem 1.1rem;
+	margin: 0 0 1.25rem;
+}
+
+.xtra-banner p {
+	margin: 0;
+	font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+	font-size: 0.95rem;
+}
+
+.xtra-banner-ok {
+	background: #d9f0e3;
+	color: #0e4a32;
+}
+
+.xtra-banner-warn {
+	background: #f3e6c8;
+	color: #7a5a1e;
+}
+
+.xtra-banner-info {
+	background: #e4eaf3;
+	color: #2a3a52;
+}
+
+.xtra-head {
+	display: grid;
+	grid-template-columns: 180px 1fr;
+	gap: 1.25rem;
+	align-items: start;
+	margin-bottom: 1.5rem;
+}
+
+.xtra-head-photo img,
+.xtra-photo {
+	width: 100%;
+	height: auto;
+	border-radius: 12px;
+	display: block;
+	object-fit: cover;
+}
+
+.xtra-org {
+	margin: 0 0 0.25rem;
+	font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+	font-size: 0.78rem;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: var(--xtra-forest);
+	font-weight: 700;
+}
+
+.xtra-title {
+	margin: 0 0 0.6rem;
+	font-size: 2rem;
+	line-height: 1.15;
+	font-weight: 700;
+}
+
+.xtra-desc {
+	font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+	font-size: 1rem;
+	line-height: 1.55;
+	color: var(--xtra-muted);
+}
+
+.xtra-desc p:last-child {
+	margin-bottom: 0;
+}
+
+.xtra-progress {
+	margin-bottom: 1.5rem;
+}
+
+.xtra-progress-label {
+	font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+	font-weight: 650;
+	margin: 0 0 0.5rem;
+}
+
+.xtra-progress-track {
+	height: 12px;
+	background: #e8e2d6;
+	border-radius: 999px;
+	overflow: hidden;
+}
+
+.xtra-progress-fill {
+	height: 100%;
+	background: linear-gradient(90deg, var(--xtra-forest), #2f9e6a);
+	border-radius: 999px;
+	min-width: 0;
+	transition: width 0.3s ease;
+}
+
+.xtra-layout {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) 300px;
+	gap: 1.25rem;
+	align-items: start;
+}
+
+.xtra-grid-wrap {
+	overflow-x: auto;
+}
+
+.xtra-grid {
+	width: 100%;
+	border-collapse: separate;
+	border-spacing: 8px;
+	font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+	background: transparent;
+}
+
+.xtra-grid th,
+.xtra-grid td {
+	border: 0;
+	padding: 0;
+	text-align: center;
+	background: transparent;
+}
+
+.xtra-grid thead th {
+	font-size: 0.8rem;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+	color: var(--xtra-muted);
+	font-weight: 700;
+	padding-bottom: 0.2rem;
+}
+
+.xtra-grid tbody th {
+	font-size: 0.82rem;
+	color: var(--xtra-muted);
+	font-weight: 600;
+	white-space: nowrap;
+	padding-right: 0.35rem;
+	text-align: right;
+	width: 3.5rem;
+}
+
+.xtra-cell-btn,
+.xtra-cell-static {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 0.15rem;
+	min-height: 64px;
+	width: 100%;
+	min-width: 72px;
+	border-radius: 12px;
+	border: 1px solid transparent;
+	padding: 0.45rem 0.3rem;
+	font: inherit;
+}
+
+.xtra-cell-btn {
+	cursor: pointer;
+	background: var(--xtra-avail);
+	color: var(--xtra-avail-text);
+	transition: transform 0.12s ease, background 0.12s ease, box-shadow 0.12s ease;
+}
+
+.xtra-cell-btn:hover,
+.xtra-cell-btn:focus-visible {
+	transform: translateY(-1px);
+	box-shadow: 0 6px 16px rgba(14, 74, 50, 0.16);
+	outline: none;
+}
+
+.xtra-cell-btn[aria-pressed="true"],
+.xtra-cell-selected .xtra-cell-btn {
+	background: var(--xtra-forest-deep);
+	color: #fff;
+}
+
+.xtra-cell-btn[aria-pressed="true"] .xtra-cell-price::before {
+	content: "✓ ";
+}
+
+.xtra-cell-pending .xtra-cell-static {
+	background: var(--xtra-pending);
+	color: var(--xtra-pending-text);
+	cursor: not-allowed;
+}
+
+.xtra-cell-sponsored .xtra-cell-static {
+	background: var(--xtra-taken);
+	color: var(--xtra-taken-text);
+	cursor: default;
+}
+
+.xtra-cell-time {
+	font-weight: 700;
+	font-size: 0.86rem;
+}
+
+.xtra-cell-price,
+.xtra-cell-state {
+	font-size: 0.72rem;
+	opacity: 0.9;
+}
+
+.xtra-legend {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.8rem 1.1rem;
+	list-style: none;
+	margin: 0.8rem 0 0;
+	padding: 0;
+	font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+	font-size: 0.8rem;
+	color: var(--xtra-muted);
+}
+
+.xtra-swatch {
+	display: inline-block;
+	width: 0.85rem;
+	height: 0.85rem;
+	border-radius: 4px;
+	margin-right: 0.35rem;
+	vertical-align: -1px;
+}
+
+.xtra-swatch-avail { background: var(--xtra-avail); }
+.xtra-swatch-sel { background: var(--xtra-forest-deep); }
+.xtra-swatch-pend { background: var(--xtra-pending); }
+.xtra-swatch-spon { background: var(--xtra-taken); }
+
+.xtra-sidebar {
+	position: sticky;
+	top: 1rem;
+}
+
+.xtra-card {
+	background: var(--xtra-card);
+	border-radius: var(--xtra-radius);
+	box-shadow: var(--xtra-shadow);
+	padding: 1.15rem 1.2rem 1.3rem;
+	border: 1px solid var(--xtra-line);
+}
+
+.xtra-card h3 {
+	margin: 0 0 0.6rem;
+	font-size: 1.25rem;
+}
+
+.xtra-sidebar-prompt,
+.xtra-sidebar-note,
+.xtra-checkout-summary {
+	font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+	font-size: 0.9rem;
+	color: var(--xtra-muted);
+	margin: 0 0 0.8rem;
+}
+
+.xtra-sidebar-count {
+	margin: 0.4rem 0;
+	font-size: 1.6rem;
+	font-weight: 700;
+}
+
+.xtra-sidebar-total {
+	font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+	display: flex;
+	justify-content: space-between;
+	align-items: baseline;
+	font-size: 0.95rem;
+	margin: 0 0 1rem;
+}
+
+.xtra-sidebar-total strong {
+	font-size: 1.15rem;
+}
+
+.xtra-btn {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 100%;
+	border: 0;
+	border-radius: 999px;
+	padding: 0.8rem 1rem;
+	font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+	font-size: 1rem;
+	font-weight: 700;
+	cursor: pointer;
+}
+
+.xtra-btn-primary {
+	background: var(--xtra-cta);
+	color: #fff;
+}
+
+.xtra-btn-primary:hover,
+.xtra-btn-primary:focus-visible {
+	background: var(--xtra-cta-hover);
+	outline: none;
+}
+
+.xtra-btn[disabled],
+.xtra-btn-primary:disabled {
+	opacity: 0.45;
+	cursor: not-allowed;
+}
+
+.xtra-back {
+	background: none;
+	border: 0;
+	padding: 0;
+	margin: 0 0 0.8rem;
+	color: var(--xtra-forest);
+	font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+	font-size: 0.85rem;
+	cursor: pointer;
+}
+
+.xtra-form label {
+	display: block;
+	font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+	font-size: 0.82rem;
+	font-weight: 650;
+	margin-bottom: 0.25rem;
+}
+
+.xtra-form p {
+	margin: 0 0 0.75rem;
+}
+
+.xtra-form input[type="text"],
+.xtra-form input[type="email"],
+.xtra-form input[type="tel"],
+.xtra-form textarea {
+	width: 100%;
+	border: 1px solid var(--xtra-line);
+	border-radius: 10px;
+	padding: 0.55rem 0.7rem;
+	font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+	font-size: 1rem;
+	background: #fff;
+	color: var(--xtra-ink);
+}
+
+.xtra-form input:focus,
+.xtra-form textarea:focus {
+	outline: 2px solid var(--xtra-forest);
+	border-color: var(--xtra-forest);
+}
+
+.xtra-fields-2 {
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: 0.6rem;
+}
+
+.xtra-terms label {
+	font-weight: 400;
+	display: flex;
+	gap: 0.45rem;
+	align-items: flex-start;
+	line-height: 1.4;
+}
+
+.xtra-terms input {
+	margin-top: 0.2rem;
+}
+
+.xtra-form-error {
+	color: #9b2c2c;
+	font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+	font-size: 0.88rem;
+	margin-top: 0.7rem;
+}
+
+.xtra-error {
+	color: #9b2c2c;
+}
+
+@media (max-width: 860px) {
+	.xtra-head,
+	.xtra-layout,
+	.xtra-fields-2 {
+		grid-template-columns: 1fr;
+	}
+
+	.xtra-sidebar {
+		position: static;
+	}
+
+	.xtra {
+		padding: 1rem;
+	}
+}

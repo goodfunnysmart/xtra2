@@ -1,0 +1,28 @@
+.xtra-metabox .xtra-schedule {
+	border: 1px solid #dcdcde;
+	padding: 12px 14px;
+	margin: 12px 0 0;
+	background: #fff;
+}
+
+.xtra-frozen-notice {
+	background: #fcf0e3;
+	border-left: 4px solid #dba617;
+	padding: 8px 12px;
+}
+
+.xtra-uninstall-warn {
+	margin-top: 24px;
+}
+
+.xtra-filters {
+	margin: 12px 0 16px;
+}
+
+.xtra-sponsors-table code {
+	font-size: 12px;
+}
+
+.xtra-settings code {
+	user-select: all;
+}

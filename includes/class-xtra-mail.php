@@ -207,4 +207,56 @@ class Xtra_Mail {
 		);
 		self::send( (string) $first->donor_email, $subject, $body );
 	}
+
+	/**
+	 * Email a single payment receipt.
+	 */
+	public static function payment_receipt( object $payment ): bool {
+		if ( empty( $payment->donor_email ) || ! is_email( (string) $payment->donor_email ) ) {
+			return false;
+		}
+		Xtra_Db::ensure_receipt_number( (int) $payment->id );
+		$payment = Xtra_Db::get_payment( (int) $payment->id );
+		if ( ! $payment ) {
+			return false;
+		}
+		$issuer  = Xtra_Receipts::issuer_details();
+		$subject = sprintf(
+			/* translators: 1: receipt number, 2: issuer name */
+			__( 'Donation receipt %1$s — %2$s', 'xtra' ),
+			(string) $payment->receipt_number,
+			$issuer['name'] !== '' ? $issuer['name'] : get_bloginfo( 'name' )
+		);
+		return self::send(
+			(string) $payment->donor_email,
+			$subject,
+			Xtra_Receipts::payment_receipt_body( $payment )
+		);
+	}
+
+	/**
+	 * Email an annual financial-year donation summary.
+	 *
+	 * @param array<int, object> $payments Payments in the FY.
+	 */
+	public static function annual_summary( string $fy, string $donor_name, string $donor_email, array $payments ): bool {
+		if ( $donor_email === '' || ! is_email( $donor_email ) || empty( $payments ) ) {
+			return false;
+		}
+		foreach ( $payments as $payment ) {
+			Xtra_Db::ensure_receipt_number( (int) $payment->id );
+		}
+		$issuer  = Xtra_Receipts::issuer_details();
+		$subject = sprintf(
+			/* translators: 1: financial year, 2: issuer name */
+			__( 'Donation summary %1$s — %2$s', 'xtra' ),
+			$fy,
+			$issuer['name'] !== '' ? $issuer['name'] : get_bloginfo( 'name' )
+		);
+		return self::send(
+			$donor_email,
+			$subject,
+			Xtra_Receipts::annual_summary_body( $fy, $donor_name, $donor_email, $payments )
+		);
+	}
 }

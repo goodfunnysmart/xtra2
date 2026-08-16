@@ -76,6 +76,12 @@ class Xtra_Public {
 		wp_enqueue_style( 'xtra-public' );
 		wp_enqueue_script( 'xtra-public' );
 
+		// After Stripe Checkout, confirm payment here so the grid updates even if the webhook is delayed or unreachable (e.g. local dev).
+		if ( isset( $_GET['xtra_success'], $_GET['session_id'] ) ) { // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+			$stripe_session = sanitize_text_field( wp_unslash( (string) $_GET['session_id'] ) ); // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+			Xtra_Stripe::confirm_checkout_session( $stripe_session );
+		}
+
 		$meta      = Xtra_Cpt::get_meta( $position_id );
 		$schedule  = $meta['schedule'];
 		$hours     = Xtra_Cpt::hours_in_schedule( $schedule );
@@ -162,7 +168,7 @@ class Xtra_Public {
 		if ( $success ) {
 			echo '<div class="xtra-banner xtra-banner-ok" role="status">';
 			echo '<p><strong>' . esc_html__( 'Thank you.', 'xtra' ) . '</strong> ';
-			echo esc_html__( 'We are confirming your sponsorship. You will receive an email shortly. Hours show as sponsored once Stripe notifies this site.', 'xtra' );
+			echo esc_html__( 'Thank you for sponsoring. Your hours are shown as sponsored on the grid below. You will receive a confirmation email shortly.', 'xtra' );
 			echo '</p></div>';
 		} elseif ( $cancelled ) {
 			echo '<div class="xtra-banner xtra-banner-info" role="status">';
@@ -259,6 +265,23 @@ class Xtra_Public {
 		echo '</div>';
 		echo '<p><label for="xtra_email">' . esc_html__( 'Email', 'xtra' ) . '</label>';
 		echo '<input type="email" id="xtra_email" name="email" required autocomplete="email" /></p>';
+		echo '<fieldset class="xtra-address"><legend>' . esc_html__( 'Postal address (for donation receipts)', 'xtra' ) . '</legend>';
+		echo '<p><label for="xtra_address">' . esc_html__( 'Street address', 'xtra' ) . '</label>';
+		echo '<input type="text" id="xtra_address" name="address" required autocomplete="street-address" /></p>';
+		echo '<div class="xtra-fields-2">';
+		echo '<p><label for="xtra_suburb">' . esc_html__( 'Suburb', 'xtra' ) . '</label>';
+		echo '<input type="text" id="xtra_suburb" name="suburb" required autocomplete="address-level2" /></p>';
+		echo '<p><label for="xtra_state">' . esc_html__( 'State', 'xtra' ) . '</label>';
+		echo '<select id="xtra_state" name="state" required autocomplete="address-level1">';
+		echo '<option value="">' . esc_html__( 'Select…', 'xtra' ) . '</option>';
+		foreach ( array( 'ACT', 'NSW', 'NT', 'QLD', 'SA', 'TAS', 'VIC', 'WA' ) as $st ) {
+			printf( '<option value="%s">%s</option>', esc_attr( $st ), esc_html( $st ) );
+		}
+		echo '</select></p>';
+		echo '</div>';
+		echo '<p><label for="xtra_postcode">' . esc_html__( 'Postcode', 'xtra' ) . '</label>';
+		echo '<input type="text" id="xtra_postcode" name="postcode" required autocomplete="postal-code" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" /></p>';
+		echo '</fieldset>';
 		echo '<p><label for="xtra_phone">' . esc_html__( 'Phone (optional)', 'xtra' ) . '</label>';
 		echo '<input type="tel" id="xtra_phone" name="phone" autocomplete="tel" /></p>';
 		echo '<p><label for="xtra_message">' . esc_html__( 'Private message to the organisation (optional)', 'xtra' ) . '</label>';

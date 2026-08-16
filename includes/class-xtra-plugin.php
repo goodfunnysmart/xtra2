@@ -37,6 +37,8 @@ final class Xtra_Plugin {
 	 * Wire hooks.
 	 */
 	public function init(): void {
+		Xtra_Db::maybe_upgrade();
+
 		load_plugin_textdomain( 'xtra', false, dirname( plugin_basename( XTRA_FILE ) ) . '/languages' );
 
 		Xtra_Cpt::init();
@@ -60,6 +62,10 @@ final class Xtra_Plugin {
 			'from_email'            => (string) get_option( 'admin_email' ),
 			'pending_minutes'       => 15,
 			'terms_url'             => '',
+			'receipt_issuer_name'   => get_bloginfo( 'name' ),
+			'receipt_abn'           => '',
+			'receipt_address'       => '',
+			'receipt_dgr_statement' => '',
 		);
 	}
 

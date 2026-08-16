@@ -40,6 +40,10 @@ class Xtra_Db {
 			donor_name varchar(191) NOT NULL DEFAULT '',
 			donor_email varchar(191) NOT NULL DEFAULT '',
 			donor_phone varchar(50) DEFAULT NULL,
+			donor_address varchar(191) NOT NULL DEFAULT '',
+			donor_suburb varchar(100) NOT NULL DEFAULT '',
+			donor_state varchar(10) NOT NULL DEFAULT '',
+			donor_postcode varchar(10) NOT NULL DEFAULT '',
 			message text,
 			amount_cents int(11) NOT NULL DEFAULT 0,
 			stripe_customer_id varchar(64) DEFAULT NULL,
@@ -61,11 +65,76 @@ class Xtra_Db {
 	}
 
 	/**
+	 * Payments table name.
+	 */
+	public static function payments_table(): string {
+		global $wpdb;
+		return $wpdb->prefix . 'xtra_payments';
+	}
+
+	/**
+	 * Create or upgrade the payments table via dbDelta.
+	 */
+	public static function create_payments_table(): void {
+		global $wpdb;
+
+		require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+
+		$table           = self::payments_table();
+		$charset_collate = $wpdb->get_charset_collate();
+
+		$sql = "CREATE TABLE {$table} (
+			id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+			stripe_invoice_id varchar(64) NOT NULL,
+			stripe_customer_id varchar(64) DEFAULT NULL,
+			stripe_subscription_id varchar(64) DEFAULT NULL,
+			donor_name varchar(191) NOT NULL DEFAULT '',
+			donor_email varchar(191) NOT NULL DEFAULT '',
+			amount_cents int(11) NOT NULL DEFAULT 0,
+			paid_at datetime NOT NULL,
+			position_id bigint(20) unsigned DEFAULT NULL,
+			hour_labels text,
+			receipt_number varchar(32) DEFAULT NULL,
+			created_at datetime NOT NULL,
+			PRIMARY KEY  (id),
+			UNIQUE KEY stripe_invoice (stripe_invoice_id),
+			KEY paid_at (paid_at),
+			KEY donor_email (donor_email),
+			KEY stripe_sub (stripe_subscription_id)
+		) {$charset_collate};";
+
+		dbDelta( $sql );
+	}
+
+	/**
+	 * Run schema upgrades when the plugin version changes.
+	 */
+	public static function maybe_upgrade(): void {
+		$db_version = (string) get_option( 'xtra_db_version', '0' );
+		if ( version_compare( $db_version, XTRA_VERSION, '>=' ) ) {
+			return;
+		}
+		self::create_table();
+		self::create_payments_table();
+		update_option( 'xtra_db_version', XTRA_VERSION, false );
+	}
+
+	/**
 	 * Drop the table (uninstall).
 	 */
 	public static function drop_table(): void {
 		global $wpdb;
 		$table = self::table();
+		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- table name is internal.
+		$wpdb->query( "DROP TABLE IF EXISTS {$table}" );
+	}
+
+	/**
+	 * Drop the payments table (uninstall).
+	 */
+	public static function drop_payments_table(): void {
+		global $wpdb;
+		$table = self::payments_table();
 		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- table name is internal.
 		$wpdb->query( "DROP TABLE IF EXISTS {$table}" );
 	}
@@ -321,6 +390,26 @@ class Xtra_Db {
 	}
 
 	/**
+	 * Live rows tied to a Stripe Checkout Session.
+	 *
+	 * @return array<int, object>
+	 */
+	public static function get_rows_by_stripe_session( string $session_id ): array {
+		global $wpdb;
+		if ( $session_id === '' ) {
+			return array();
+		}
+		$table = self::table();
+		$rows  = $wpdb->get_results(
+			$wpdb->prepare(
+				"SELECT * FROM {$table} WHERE stripe_session_id = %s ORDER BY id ASC",
+				$session_id
+			)
+		);
+		return is_array( $rows ) ? $rows : array();
+	}
+
+	/**
 	 * Rows sharing a Stripe subscription.
 	 *
 	 * @return array<int, object>
@@ -348,8 +437,291 @@ class Xtra_Db {
 	 */
 	public static function update_row( int $id, array $fields ): bool {
 		global $wpdb;
-		$result = $wpdb->update( self::table(), $fields, array( 'id' => $id ), null, array( '%d' ) );
+		$formats = array();
+		foreach ( $fields as $value ) {
+			if ( is_int( $value ) ) {
+				$formats[] = '%d';
+			} elseif ( is_float( $value ) ) {
+				$formats[] = '%f';
+			} elseif ( null === $value ) {
+				$formats[] = '%s';
+			} else {
+				$formats[] = '%s';
+			}
+		}
+		$result = $wpdb->update( self::table(), $fields, array( 'id' => $id ), $formats, array( '%d' ) );
+		if ( false === $result ) {
+			error_log( 'Xtra DB Update Error: ' . $wpdb->last_error . ' | Query: ' . $wpdb->last_query );
+		}
+		return true; // Return true even if zero rows changed (e.g. data was identical) so the process continues.
+	}
+
+	/**
+	 * Update donor contact fields on all live rows for a subscription.
+	 *
+	 * @param array<string, string> $fields Donor fields.
+	 */
+	public static function update_donor_for_subscription( string $subscription_id, array $fields ): void {
+		if ( $subscription_id === '' ) {
+			return;
+		}
+		global $wpdb;
+		$table = self::table();
+		$allowed = array(
+			'donor_name'     => '%s',
+			'donor_email'    => '%s',
+			'donor_phone'    => '%s',
+			'donor_address'  => '%s',
+			'donor_suburb'   => '%s',
+			'donor_state'    => '%s',
+			'donor_postcode' => '%s',
+		);
+		$set    = array();
+		$values = array();
+		foreach ( $allowed as $key => $format ) {
+			if ( ! array_key_exists( $key, $fields ) ) {
+				continue;
+			}
+			$set[]    = "{$key} = {$format}";
+			$values[] = $fields[ $key ];
+		}
+		if ( empty( $set ) ) {
+			return;
+		}
+		$values[] = $subscription_id;
+		$sql      = "UPDATE {$table} SET " . implode( ', ', $set ) . ' WHERE stripe_subscription_id = %s AND ended_at IS NULL';
+		$wpdb->query( $wpdb->prepare( $sql, $values ) );
+	}
+
+	/**
+	 * Insert a payment row if the Stripe invoice is not already recorded.
+	 *
+	 * @param array<string, mixed> $data Payment fields.
+	 * @return int Insert id, or existing id, or 0 on failure.
+	 */
+	public static function insert_payment( array $data ): int {
+		global $wpdb;
+		$table      = self::payments_table();
+		$invoice_id = isset( $data['stripe_invoice_id'] ) ? (string) $data['stripe_invoice_id'] : '';
+		if ( $invoice_id === '' ) {
+			return 0;
+		}
+
+		$existing = $wpdb->get_var(
+			$wpdb->prepare(
+				"SELECT id FROM {$table} WHERE stripe_invoice_id = %s",
+				$invoice_id
+			)
+		);
+		if ( $existing ) {
+			return (int) $existing;
+		}
+
+		$now = Xtra_Plugin::now_mysql();
+		$row = array(
+			'stripe_invoice_id'      => $invoice_id,
+			'stripe_customer_id'     => isset( $data['stripe_customer_id'] ) ? (string) $data['stripe_customer_id'] : null,
+			'stripe_subscription_id' => isset( $data['stripe_subscription_id'] ) ? (string) $data['stripe_subscription_id'] : null,
+			'donor_name'             => isset( $data['donor_name'] ) ? (string) $data['donor_name'] : '',
+			'donor_email'            => isset( $data['donor_email'] ) ? (string) $data['donor_email'] : '',
+			'amount_cents'           => isset( $data['amount_cents'] ) ? (int) $data['amount_cents'] : 0,
+			'paid_at'                => isset( $data['paid_at'] ) ? (string) $data['paid_at'] : $now,
+			'position_id'            => isset( $data['position_id'] ) ? (int) $data['position_id'] : null,
+			'hour_labels'            => isset( $data['hour_labels'] ) ? (string) $data['hour_labels'] : '',
+			'receipt_number'         => isset( $data['receipt_number'] ) ? (string) $data['receipt_number'] : null,
+			'created_at'             => $now,
+		);
+
+		$ok = $wpdb->insert(
+			$table,
+			$row,
+			array( '%s', '%s', '%s', '%s', '%s', '%d', '%s', '%d', '%s', '%s', '%s' )
+		);
+		return $ok ? (int) $wpdb->insert_id : 0;
+	}
+
+	/**
+	 * Fetch a payment by id.
+	 *
+	 * @return object|null
+	 */
+	public static function get_payment( int $id ) {
+		global $wpdb;
+		$table = self::payments_table();
+		return $wpdb->get_row(
+			$wpdb->prepare(
+				"SELECT * FROM {$table} WHERE id = %d",
+				$id
+			)
+		);
+	}
+
+	/**
+	 * Assign a receipt number to a payment if it does not have one.
+	 */
+	public static function ensure_receipt_number( int $payment_id ): string {
+		$payment = self::get_payment( $payment_id );
+		if ( ! $payment ) {
+			return '';
+		}
+		if ( ! empty( $payment->receipt_number ) ) {
+			return (string) $payment->receipt_number;
+		}
+		$number = Xtra_Receipts::next_receipt_number();
+		self::update_payment(
+			$payment_id,
+			array(
+				'receipt_number' => $number,
+			)
+		);
+		return $number;
+	}
+
+	/**
+	 * Update a payment row.
+	 *
+	 * @param array<string, mixed> $fields Fields.
+	 */
+	public static function update_payment( int $id, array $fields ): bool {
+		global $wpdb;
+		$result = $wpdb->update( self::payments_table(), $fields, array( 'id' => $id ), null, array( '%d' ) );
 		return false !== $result;
+	}
+
+	/**
+	 * Payments in an Australian financial year for one donor email.
+	 *
+	 * @return array<int, object>
+	 */
+	public static function payments_for_donor_fy( string $email, string $fy_start, string $fy_end ): array {
+		global $wpdb;
+		if ( $email === '' ) {
+			return array();
+		}
+		$table = self::payments_table();
+		$rows  = $wpdb->get_results(
+			$wpdb->prepare(
+				"SELECT * FROM {$table}
+				WHERE donor_email = %s
+					AND paid_at >= %s
+					AND paid_at <= %s
+				ORDER BY paid_at ASC",
+				$email,
+				$fy_start,
+				$fy_end
+			)
+		);
+		return is_array( $rows ) ? $rows : array();
+	}
+
+	/**
+	 * All payments in a financial year, grouped by donor email.
+	 *
+	 * @return array<int, object>
+	 */
+	public static function payments_in_fy( string $fy_start, string $fy_end ): array {
+		global $wpdb;
+		$table = self::payments_table();
+		$rows  = $wpdb->get_results(
+			$wpdb->prepare(
+				"SELECT * FROM {$table}
+				WHERE paid_at >= %s AND paid_at <= %s
+				ORDER BY donor_email ASC, paid_at ASC",
+				$fy_start,
+				$fy_end
+			)
+		);
+		return is_array( $rows ) ? $rows : array();
+	}
+
+	/**
+	 * Donor totals for a financial year.
+	 *
+	 * @return array<int, array{email:string, name:string, total_cents:int, payment_count:int}>
+	 */
+	public static function donor_totals_fy( string $fy_start, string $fy_end ): array {
+		global $wpdb;
+		$table = self::payments_table();
+		$rows  = $wpdb->get_results(
+			$wpdb->prepare(
+				"SELECT donor_email AS email,
+					MAX(donor_name) AS name,
+					SUM(amount_cents) AS total_cents,
+					COUNT(*) AS payment_count
+				FROM {$table}
+				WHERE paid_at >= %s AND paid_at <= %s AND donor_email <> ''
+				GROUP BY donor_email
+				ORDER BY name ASC",
+				$fy_start,
+				$fy_end
+			),
+			ARRAY_A
+		);
+		if ( ! is_array( $rows ) ) {
+			return array();
+		}
+		$out = array();
+		foreach ( $rows as $row ) {
+			$out[] = array(
+				'email'         => (string) $row['email'],
+				'name'          => (string) $row['name'],
+				'total_cents'   => (int) $row['total_cents'],
+				'payment_count' => (int) $row['payment_count'],
+			);
+		}
+		return $out;
+	}
+
+	/**
+	 * Sponsorship rows grouped for the admin sponsors list.
+	 *
+	 * @param array<string, mixed> $args Filters (position_id, status).
+	 * @return array<int, array<string, mixed>>
+	 */
+	public static function sponsor_groups( array $args ): array {
+		$result = self::query_admin(
+			array(
+				'position_id'   => $args['position_id'] ?? 0,
+				'status'        => $args['status'] ?? 'all',
+				'page'          => 1,
+				'per_page'      => 500,
+				'include_ended' => false,
+			)
+		);
+
+		$groups = array();
+		foreach ( $result['rows'] as $row ) {
+			$sub = (string) $row->stripe_subscription_id;
+			$key = $sub !== '' ? 'sub:' . $sub : ( (string) $row->stripe_session_id !== '' ? 'sess:' . $row->stripe_session_id : 'row:' . $row->id );
+			if ( ! isset( $groups[ $key ] ) ) {
+				$groups[ $key ] = array(
+					'key'                    => $key,
+					'donor_name'             => (string) $row->donor_name,
+					'donor_email'            => (string) $row->donor_email,
+					'status'                 => (string) $row->status,
+					'stripe_subscription_id' => $sub,
+					'stripe_session_id'      => (string) $row->stripe_session_id,
+					'position_id'            => (int) $row->position_id,
+					'hours'                  => array(),
+					'monthly_cents'          => 0,
+					'row_ids'                => array(),
+				);
+			}
+			$groups[ $key ]['hours'][]         = Xtra_Plugin::cell_label( (int) $row->dow, (int) $row->hour );
+			$groups[ $key ]['monthly_cents']  += (int) $row->amount_cents;
+			$groups[ $key ]['row_ids'][]       = (int) $row->id;
+			if ( (string) $row->donor_name !== '' ) {
+				$groups[ $key ]['donor_name'] = (string) $row->donor_name;
+			}
+			if ( (string) $row->donor_email !== '' ) {
+				$groups[ $key ]['donor_email'] = (string) $row->donor_email;
+			}
+			if ( $groups[ $key ]['status'] !== (string) $row->status ) {
+				$groups[ $key ]['status'] = 'mixed';
+			}
+		}
+
+		return array_values( $groups );
 	}
 
 	/**

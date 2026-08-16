@@ -183,6 +183,10 @@ class Xtra_Rest {
 		$last  = sanitize_text_field( (string) $request->get_param( 'last_name' ) );
 		$email = sanitize_email( (string) $request->get_param( 'email' ) );
 		$phone = sanitize_text_field( (string) $request->get_param( 'phone' ) );
+		$address = sanitize_text_field( (string) $request->get_param( 'address' ) );
+		$suburb  = sanitize_text_field( (string) $request->get_param( 'suburb' ) );
+		$state   = strtoupper( sanitize_text_field( (string) $request->get_param( 'state' ) ) );
+		$postcode = sanitize_text_field( (string) $request->get_param( 'postcode' ) );
 		$message = sanitize_textarea_field( (string) $request->get_param( 'message' ) );
 		$terms   = (bool) $request->get_param( 'terms' );
 		$return  = esc_url_raw( (string) $request->get_param( 'return_url' ) );
@@ -192,6 +196,13 @@ class Xtra_Rest {
 		}
 		if ( $email === '' || ! is_email( $email ) ) {
 			return new WP_Error( 'email', __( 'Please enter a valid email address.', 'xtra' ), array( 'status' => 400 ) );
+		}
+		if ( $address === '' || $suburb === '' || $state === '' || $postcode === '' ) {
+			return new WP_Error(
+				'address',
+				__( 'Please enter your postal address. We need this for donation receipts.', 'xtra' ),
+				array( 'status' => 400 )
+			);
 		}
 		if ( ! $terms ) {
 			return new WP_Error( 'terms', __( 'Please accept the terms to continue.', 'xtra' ), array( 'status' => 400 ) );
@@ -216,10 +227,14 @@ class Xtra_Rest {
 		}
 
 		$donor = array(
-			'name'    => trim( $first . ' ' . $last ),
-			'email'   => $email,
-			'phone'   => $phone,
-			'message' => $message,
+			'name'     => trim( $first . ' ' . $last ),
+			'email'    => $email,
+			'phone'    => $phone,
+			'address'  => $address,
+			'suburb'   => $suburb,
+			'state'    => $state,
+			'postcode' => $postcode,
+			'message'  => $message,
 		);
 
 		$sep     = str_contains( $return, '?' ) ? '&' : '?';
@@ -256,23 +271,32 @@ class Xtra_Rest {
 		$sig       = (string) $request->get_header( 'stripe-signature' );
 		$secret    = (string) Xtra_Plugin::options()['stripe_webhook_secret'];
 
+		error_log( 'Xtra Webhook Received. Sig present: ' . ( $sig !== '' ? 'yes' : 'no' ) );
+
 		if ( $secret === '' ) {
+			error_log( 'Xtra Webhook Error: No secret configured.' );
 			return new WP_Error( 'no_secret', __( 'Webhook secret is not configured.', 'xtra' ), array( 'status' => 500 ) );
 		}
 		if ( ! Xtra_Stripe::verify_signature( $payload, $sig, $secret ) ) {
+			error_log( 'Xtra Webhook Error: Invalid Stripe signature.' );
 			return new WP_Error( 'bad_sig', __( 'Invalid Stripe signature.', 'xtra' ), array( 'status' => 400 ) );
 		}
 
 		$event = json_decode( $payload, true );
 		if ( ! is_array( $event ) ) {
+			error_log( 'Xtra Webhook Error: Invalid JSON.' );
 			return new WP_Error( 'bad_json', __( 'Invalid JSON.', 'xtra' ), array( 'status' => 400 ) );
 		}
 
+		error_log( 'Xtra Webhook Event: ' . ( $event['type'] ?? 'unknown' ) );
+
 		$result = Xtra_Stripe::handle_event( $event );
 		if ( is_wp_error( $result ) ) {
+			error_log( 'Xtra Webhook Error: ' . $result->get_error_message() );
 			return $result;
 		}
 
+		error_log( 'Xtra Webhook Handled Successfully.' );
 		return rest_ensure_response( array( 'received' => true ) );
 	}
 }

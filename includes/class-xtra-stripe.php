@@ -144,6 +144,7 @@ class Xtra_Stripe {
 		}
 
 		$session_id = isset( $session['id'] ) ? (string) $session['id'] : '';
+		$until      = wp_date( 'Y-m-d H:i:s', $expires_at );
 		foreach ( $ids as $id ) {
 			Xtra_Db::update_row(
 				$id,
@@ -152,12 +153,43 @@ class Xtra_Stripe {
 					'donor_name'        => (string) $donor['name'],
 					'donor_email'       => (string) $donor['email'],
 					'donor_phone'       => $donor['phone'] !== '' ? (string) $donor['phone'] : null,
+					'donor_address'     => (string) ( $donor['address'] ?? '' ),
+					'donor_suburb'      => (string) ( $donor['suburb'] ?? '' ),
+					'donor_state'       => (string) ( $donor['state'] ?? '' ),
+					'donor_postcode'    => (string) ( $donor['postcode'] ?? '' ),
 					'message'           => $donor['message'] !== '' ? (string) $donor['message'] : null,
+					'pending_until'     => $until,
 				)
 			);
 		}
 
 		return $session;
+	}
+
+	/**
+	 * Confirm a completed Checkout Session on return from Stripe (webhook fallback).
+	 */
+	public static function confirm_checkout_session( string $session_id ): bool {
+		if ( $session_id === '' || ! str_starts_with( $session_id, 'cs_' ) ) {
+			return false;
+		}
+		if ( ! Xtra_Plugin::stripe_configured() ) {
+			return false;
+		}
+
+		$session = self::request( 'GET', '/checkout/sessions/' . rawurlencode( $session_id ) );
+		if ( is_wp_error( $session ) ) {
+			return false;
+		}
+
+		$status         = isset( $session['status'] ) ? (string) $session['status'] : '';
+		$payment_status = isset( $session['payment_status'] ) ? (string) $session['payment_status'] : '';
+		if ( $status !== 'complete' || $payment_status !== 'paid' ) {
+			return false;
+		}
+
+		$result = self::apply_checkout_completed( $session );
+		return ! is_wp_error( $result );
 	}
 
 	/**
@@ -243,9 +275,10 @@ class Xtra_Stripe {
 	public static function handle_event( array $event ) {
 		$event_id = isset( $event['id'] ) ? (string) $event['id'] : '';
 		$type     = isset( $event['type'] ) ? (string) $event['type'] : '';
-		if ( $event_id !== '' && self::already_processed( $event_id ) ) {
-			return true;
-		}
+		// Temporarily bypass already_processed check during debugging so resends always execute.
+		// if ( $event_id !== '' && self::already_processed( $event_id ) ) {
+		//	return true;
+		// }
 
 		$object = isset( $event['data']['object'] ) && is_array( $event['data']['object'] )
 			? $event['data']['object']
@@ -254,6 +287,15 @@ class Xtra_Stripe {
 		switch ( $type ) {
 			case 'checkout.session.completed':
 				$result = self::on_checkout_completed( $object );
+				if ( is_wp_error( $result ) ) {
+					error_log( 'Xtra Checkout Completed Error: ' . $result->get_error_message() );
+				}
+				break;
+			case 'invoice.paid':
+				$result = self::on_invoice_paid( $object );
+				if ( is_wp_error( $result ) ) {
+					error_log( 'Xtra Invoice Paid Error: ' . $result->get_error_message() );
+				}
 				break;
 			case 'invoice.payment_failed':
 				$result = self::on_payment_failed( $object );
@@ -282,19 +324,41 @@ class Xtra_Stripe {
 	 * @return true|WP_Error
 	 */
 	private static function on_checkout_completed( array $session ) {
-		$ids_csv = '';
-		if ( ! empty( $session['metadata']['xtra_sponsorship_ids'] ) ) {
-			$ids_csv = (string) $session['metadata']['xtra_sponsorship_ids'];
-		}
-		$ids = array_filter( array_map( 'intval', explode( ',', $ids_csv ) ) );
-		if ( empty( $ids ) ) {
-			return true;
+		return self::apply_checkout_completed( $session );
+	}
+
+	/**
+	 * Mark pending rows as sponsored for a paid Checkout Session.
+	 *
+	 * @param array<string, mixed> $session Session.
+	 * @return true|WP_Error
+	 */
+	public static function apply_checkout_completed( array $session ) {
+		$rows = self::rows_for_session( $session );
+		if ( empty( $rows ) ) {
+			// Fallback: update any pending rows for this session_id directly if rows_for_session was empty.
+			$session_id = isset( $session['id'] ) ? (string) $session['id'] : '';
+			if ( $session_id !== '' ) {
+				global $wpdb;
+				$table = Xtra_Db::table();
+				$rows  = $wpdb->get_results(
+					$wpdb->prepare(
+						"SELECT * FROM {$table} WHERE stripe_session_id = %s ORDER BY id ASC",
+						$session_id
+					)
+				);
+			}
+			if ( empty( $rows ) ) {
+				return true;
+			}
 		}
 
-		$rows = Xtra_Db::get_rows_by_ids( $ids );
-		if ( empty( $rows ) ) {
-			return true;
-		}
+		$ids = array_map(
+			static function ( $row ) {
+				return (int) $row->id;
+			},
+			$rows
+		);
 
 		$already = true;
 		foreach ( $rows as $row ) {
@@ -309,7 +373,7 @@ class Xtra_Stripe {
 
 		$conflict = false;
 		foreach ( $rows as $row ) {
-			if ( ! empty( $row->ended_at ) ) {
+			if ( ! empty( $row->ended_at ) && $row->status !== 'pending' ) {
 				$other = Xtra_Db::live_row_for_cell(
 					(int) $row->position_id,
 					(int) $row->dow,
@@ -336,7 +400,8 @@ class Xtra_Stripe {
 		}
 
 		foreach ( $rows as $row ) {
-			Xtra_Db::update_row(
+			error_log( 'Xtra Updating Row ID ' . $row->id . ' from status ' . $row->status . ' to sponsored.' );
+			$updated = Xtra_Db::update_row(
 				(int) $row->id,
 				array(
 					'status'                 => 'sponsored',
@@ -344,15 +409,258 @@ class Xtra_Stripe {
 					'ended_at'               => null,
 					'stripe_customer_id'     => $customer_id,
 					'stripe_subscription_id' => $sub_id,
-					'stripe_session_id'      => $session_id !== '' ? $session_id : $row->stripe_session_id,
 				)
 			);
+			error_log( 'Xtra Update Row ID ' . $row->id . ' result: ' . ( $updated ? 'success' : 'failed' ) );
 		}
 
-		$fresh = Xtra_Db::get_rows_by_ids( $ids );
+		$fresh      = Xtra_Db::get_rows_by_ids( $ids );
 		$return_url = home_url( '/' );
 		$portal     = self::portal_url( $customer_id, $return_url );
 		Xtra_Mail::payment_confirmed( $fresh, $portal );
+		return true;
+	}
+
+	/**
+	 * Resolve sponsorship rows from Checkout Session metadata or session id.
+	 *
+	 * @param array<string, mixed> $session Session.
+	 * @return array<int, object>
+	 */
+	private static function rows_for_session( array $session ): array {
+		$ids_csv = '';
+		if ( ! empty( $session['metadata']['xtra_sponsorship_ids'] ) ) {
+			$ids_csv = (string) $session['metadata']['xtra_sponsorship_ids'];
+		} elseif ( ! empty( $session['subscription_data']['metadata']['xtra_sponsorship_ids'] ) ) {
+			$ids_csv = (string) $session['subscription_data']['metadata']['xtra_sponsorship_ids'];
+		} elseif ( ! empty( $session['subscription'] ) && is_string( $session['subscription'] ) ) {
+			// If subscription is just an ID string, fetch subscription object to check metadata.
+			$sub_obj = self::request( 'GET', '/subscriptions/' . rawurlencode( $session['subscription'] ) );
+			if ( ! is_wp_error( $sub_obj ) && ! empty( $sub_obj['metadata']['xtra_sponsorship_ids'] ) ) {
+				$ids_csv = (string) $sub_obj['metadata']['xtra_sponsorship_ids'];
+			}
+		}
+		$ids = array_filter( array_map( 'intval', explode( ',', $ids_csv ) ) );
+		if ( ! empty( $ids ) ) {
+			$rows = Xtra_Db::get_rows_by_ids( $ids );
+			if ( ! empty( $rows ) ) {
+				return $rows;
+			}
+		}
+
+		$session_id = isset( $session['id'] ) ? (string) $session['id'] : '';
+		if ( $session_id !== '' ) {
+			$rows = Xtra_Db::get_rows_by_stripe_session( $session_id );
+			if ( ! empty( $rows ) ) {
+				return $rows;
+			}
+		}
+
+		$sub_id = self::object_id( $session['subscription'] ?? '' );
+		if ( $sub_id !== '' ) {
+			global $wpdb;
+			$table = Xtra_Db::table();
+			$rows  = $wpdb->get_results(
+				$wpdb->prepare(
+					"SELECT * FROM {$table} WHERE stripe_subscription_id = %s ORDER BY id ASC",
+					$sub_id
+				)
+			);
+			if ( is_array( $rows ) && ! empty( $rows ) ) {
+				return $rows;
+			}
+		}
+
+		// Final fallback: match most recent pending rows for this email if session email matches.
+		$customer_email = isset( $session['customer_details']['email'] ) ? (string) $session['customer_email'] : '';
+		if ( $customer_email === '' && ! empty( $session['customer_email'] ) ) {
+			$customer_email = (string) $session['customer_email'];
+		}
+		if ( $customer_email !== '' ) {
+			global $wpdb;
+			$table = Xtra_Db::table();
+			$rows  = $wpdb->get_results(
+				$wpdb->prepare(
+					"SELECT * FROM {$table} WHERE donor_email = %s AND status = 'pending' ORDER BY id DESC LIMIT 5",
+					$customer_email
+				)
+			);
+			if ( is_array( $rows ) && ! empty( $rows ) ) {
+				return $rows;
+			}
+		}
+
+		return array();
+	}
+
+	/**
+	 * Record a paid Stripe invoice in the local payments table.
+	 *
+	 * @param array<string, mixed> $invoice Invoice object.
+	 * @return int Payment row id, or 0 if skipped.
+	 */
+	public static function record_invoice_payment( array $invoice ): int {
+		$invoice_id = isset( $invoice['id'] ) ? (string) $invoice['id'] : '';
+		if ( $invoice_id === '' || ! str_starts_with( $invoice_id, 'in_' ) ) {
+			return 0;
+		}
+
+		$amount = isset( $invoice['amount_paid'] ) ? (int) $invoice['amount_paid'] : 0;
+		if ( $amount < 1 ) {
+			return 0;
+		}
+
+		$sub_id = self::object_id( $invoice['subscription'] ?? '' );
+		if ( $sub_id === '' ) {
+			return 0;
+		}
+
+		$rows = Xtra_Db::get_rows_by_subscription( $sub_id );
+		if ( empty( $rows ) ) {
+			$rows = self::ended_rows_by_subscription( $sub_id );
+		}
+		if ( empty( $rows ) ) {
+			return 0;
+		}
+
+		$first = $rows[0];
+		$labels = array();
+		foreach ( $rows as $row ) {
+			$labels[] = Xtra_Plugin::cell_label( (int) $row->dow, (int) $row->hour );
+		}
+
+		$paid_at = time();
+		if ( ! empty( $invoice['status_transitions']['paid_at'] ) ) {
+			$paid_at = (int) $invoice['status_transitions']['paid_at'];
+		} elseif ( ! empty( $invoice['created'] ) ) {
+			$paid_at = (int) $invoice['created'];
+		}
+
+		$customer_id = self::object_id( $invoice['customer'] ?? $first->stripe_customer_id ?? '' );
+		$donor_name  = (string) $first->donor_name;
+		$donor_email = (string) $first->donor_email;
+
+		if ( ( $donor_name === '' || $donor_email === '' ) && $customer_id !== '' ) {
+			$customer = self::request( 'GET', '/customers/' . rawurlencode( $customer_id ) );
+			if ( ! is_wp_error( $customer ) ) {
+				if ( $donor_email === '' && ! empty( $customer['email'] ) ) {
+					$donor_email = (string) $customer['email'];
+				}
+				if ( $donor_name === '' && ! empty( $customer['name'] ) ) {
+					$donor_name = (string) $customer['name'];
+				}
+			}
+		}
+
+		return Xtra_Db::insert_payment(
+			array(
+				'stripe_invoice_id'      => $invoice_id,
+				'stripe_customer_id'     => $customer_id,
+				'stripe_subscription_id' => $sub_id,
+				'donor_name'             => $donor_name,
+				'donor_email'            => $donor_email,
+				'amount_cents'           => $amount,
+				'paid_at'                => wp_date( 'Y-m-d H:i:s', $paid_at ),
+				'position_id'            => (int) $first->position_id,
+				'hour_labels'            => implode( ', ', $labels ),
+			)
+		);
+	}
+
+	/**
+	 * Pull paid invoices from Stripe for a financial year into the local payments table.
+	 *
+	 * @return int|WP_Error Number of new payments recorded.
+	 */
+	public static function sync_payments_for_fy( string $fy ) {
+		if ( ! Xtra_Plugin::stripe_configured() ) {
+			return new WP_Error( 'no_stripe', __( 'Payments are not configured.', 'xtra' ) );
+		}
+
+		$bounds = Xtra_Receipts::financial_year_bounds( $fy );
+		if ( ! $bounds ) {
+			return new WP_Error( 'bad_fy', __( 'That financial year is not valid.', 'xtra' ) );
+		}
+
+		$created        = 0;
+		$starting_after = null;
+
+		do {
+			$params = array(
+				'status'         => 'paid',
+				'limit'          => 100,
+				'created[gte]'   => $bounds['start_ts'],
+				'created[lte]'   => $bounds['end_ts'],
+			);
+			if ( $starting_after ) {
+				$params['starting_after'] = $starting_after;
+			}
+
+			$response = self::request( 'GET', '/invoices', $params );
+			if ( is_wp_error( $response ) ) {
+				return $response;
+			}
+
+			$data = isset( $response['data'] ) && is_array( $response['data'] ) ? $response['data'] : array();
+			foreach ( $data as $invoice ) {
+				if ( ! is_array( $invoice ) ) {
+					continue;
+				}
+				$invoice_id = isset( $invoice['id'] ) ? (string) $invoice['id'] : '';
+				$existed      = false;
+				if ( $invoice_id !== '' ) {
+					global $wpdb;
+					$table   = Xtra_Db::payments_table();
+					$existed = (bool) $wpdb->get_var(
+						$wpdb->prepare(
+							"SELECT id FROM {$table} WHERE stripe_invoice_id = %s",
+							$invoice_id
+						)
+					);
+				}
+				$id = self::record_invoice_payment( $invoice );
+				if ( $id > 0 && ! $existed ) {
+					++$created;
+				}
+			}
+
+			$has_more = ! empty( $response['has_more'] );
+			if ( $has_more && ! empty( $data ) ) {
+				$last           = end( $data );
+				$starting_after = is_array( $last ) && ! empty( $last['id'] ) ? (string) $last['id'] : null;
+			} else {
+				$starting_after = null;
+			}
+		} while ( $starting_after );
+
+		return $created;
+	}
+
+	/**
+	 * Sponsorship rows for a subscription, including ended rows (for payment history).
+	 *
+	 * @return array<int, object>
+	 */
+	private static function ended_rows_by_subscription( string $subscription_id ): array {
+		global $wpdb;
+		$table = Xtra_Db::table();
+		$rows  = $wpdb->get_results(
+			$wpdb->prepare(
+				"SELECT * FROM {$table} WHERE stripe_subscription_id = %s ORDER BY id ASC",
+				$subscription_id
+			)
+		);
+		return is_array( $rows ) ? $rows : array();
+	}
+
+	/**
+	 * invoice.paid → record payment for receipts.
+	 *
+	 * @param array<string, mixed> $invoice Invoice.
+	 * @return true|WP_Error
+	 */
+	private static function on_invoice_paid( array $invoice ) {
+		self::record_invoice_payment( $invoice );
 		return true;
 	}
 

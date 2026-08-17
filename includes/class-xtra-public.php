@@ -87,15 +87,26 @@ class Xtra_Public {
 		$hours     = Xtra_Cpt::hours_in_schedule( $schedule );
 		$days      = $schedule['days'];
 		$rate      = (int) $meta['hourly_monthly_rate'];
-		$target    = max( 0, (int) $meta['weekly_hour_target'] );
+		
 		$live      = Xtra_Db::live_cell_map( $position_id );
-		$sponsored = 0;
-		foreach ( $live as $row ) {
-			if ( in_array( $row->status, array( 'sponsored', 'cancelling' ), true ) ) {
-				++$sponsored;
+		
+		// Calculate total shown slots as denominator, and total sponsored/paid slots as numerator
+		$total_shown = 0;
+		$sponsored   = 0;
+		foreach ( $hours as $hour ) {
+			foreach ( $days as $dow ) {
+				if ( Xtra_Cpt::is_shown( $schedule, $dow, $hour ) ) {
+					++$total_shown;
+					$key = $dow . '-' . $hour;
+					$row = $live[ $key ] ?? null;
+					if ( Xtra_Cpt::is_paid( $schedule, $dow, $hour ) || ( $row && in_array( $row->status, array( 'sponsored', 'cancelling' ), true ) ) ) {
+						++$sponsored;
+					}
+				}
 			}
 		}
-		$pct = $target > 0 ? min( 100, (int) round( ( $sponsored / $target ) * 100 ) ) : 0;
+		$target = $total_shown > 0 ? $total_shown : 1;
+		$pct    = min( 100, (int) round( ( $sponsored / $target ) * 100 ) );
 
 		$opts     = Xtra_Plugin::options();
 		$configured = Xtra_Plugin::stripe_configured();
@@ -127,7 +138,8 @@ class Xtra_Public {
 		);
 
 		ob_start();
-		self::render( $post, $meta, $days, $hours, $live, $sponsored, $target, $pct, $rate, $configured, $opts );
+		$schedule = $meta['schedule'];
+		self::render( $post, $meta, $days, $hours, $live, $sponsored, $target, $pct, $rate, $configured, $opts, $schedule );
 		return (string) ob_get_clean();
 	}
 
@@ -145,8 +157,9 @@ class Xtra_Public {
 	 * @param int                  $rate       Cents.
 	 * @param bool                 $configured Stripe ready.
 	 * @param array<string, mixed> $opts       Options.
+	 * @param array<string, mixed> $schedule   Schedule.
 	 */
-	private static function render( WP_Post $post, array $meta, array $days, array $hours, array $live, int $sponsored, int $target, int $pct, int $rate, bool $configured, array $opts ): void {
+	private static function render( WP_Post $post, array $meta, array $days, array $hours, array $live, int $sponsored, int $target, int $pct, int $rate, bool $configured, array $opts, array $schedule ): void {
 		$day_labels = Xtra_Plugin::day_labels();
 		$org        = (string) $meta['org_name'];
 		$thumb      = get_the_post_thumbnail( $post, 'large', array( 'class' => 'xtra-photo' ) );
@@ -183,19 +196,31 @@ class Xtra_Public {
 		}
 
 		echo '<header class="xtra-head">';
-		if ( $thumb ) {
-			echo '<div class="xtra-head-photo">' . $thumb . '</div>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- wp thumbnail.
-		}
-		echo '<div class="xtra-head-copy">';
 		if ( $org !== '' ) {
 			echo '<p class="xtra-org">' . esc_html( $org ) . '</p>';
 		}
 		echo '<h2 class="xtra-title">' . esc_html( get_the_title( $post ) ) . '</h2>';
+		echo '</header>';
+
+		echo '<div class="xtra-main-grid">';
 		$content = apply_filters( 'the_content', $post->post_content );
 		if ( $content !== '' ) {
-			echo '<div class="xtra-desc">' . $content . '</div>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+			echo '<div class="xtra-desc-col"><div class="xtra-desc">' . $content . '</div></div>';
 		}
-		echo '</div></header>';
+		if ( $thumb ) {
+			echo '<div class="xtra-media-col">' . $thumb . '</div>';
+		}
+		echo '</div>';
+
+		$video = (string) $meta['video_embed'];
+		if ( str_contains( $video, 'watch?v=' ) ) {
+			$video = str_replace( 'watch?v=', 'embed/', $video );
+		} elseif ( str_contains( $video, 'youtu.be/' ) ) {
+			$video = str_replace( 'youtu.be/', 'www.youtube.com/embed/', $video );
+		}
+		if ( $video !== '' ) {
+			echo '<div class="xtra-video-row"><div class="xtra-video-wrapper"><iframe src="' . esc_url( $video ) . '" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe></div></div>';
+		}
 
 		echo '<div class="xtra-progress" aria-label="' . esc_attr__( 'Sponsorship progress', 'xtra' ) . '">';
 		echo '<p class="xtra-progress-label">';
@@ -210,22 +235,66 @@ class Xtra_Public {
 		echo '<div class="xtra-progress-fill" style="width:' . esc_attr( (string) $pct ) . '%"></div>';
 		echo '</div></div>';
 
+		// Filter days to only those that have at least one shown hour
+		$active_days = array();
+		foreach ( $days as $dow ) {
+			$has_shown = false;
+			foreach ( $hours as $hour ) {
+				if ( Xtra_Cpt::is_shown( $schedule, $dow, $hour ) ) {
+					$has_shown = true;
+					break;
+				}
+			}
+			if ( $has_shown ) {
+				$active_days[] = $dow;
+			}
+		}
+
 		echo '<div class="xtra-layout">';
 		echo '<div class="xtra-grid-wrap">';
 		echo '<table class="xtra-grid" role="grid">';
 		echo '<thead><tr><th class="xtra-grid-corner"></th>';
-		foreach ( $days as $dow ) {
+		foreach ( $active_days as $dow ) {
 			echo '<th scope="col">' . esc_html( $day_labels[ $dow ] ?? (string) $dow ) . '</th>';
 		}
 		echo '</tr></thead><tbody>';
 
 		foreach ( $hours as $hour ) {
+			// Check if this hour has at least one active day shown
+			$has_hour_shown = false;
+			foreach ( $active_days as $dow ) {
+				if ( Xtra_Cpt::is_shown( $schedule, $dow, $hour ) ) {
+					$has_hour_shown = true;
+					break;
+				}
+			}
+			if ( ! $has_hour_shown ) {
+				continue; // Skip hour rows that have no shown cells
+			}
+
 			echo '<tr>';
 			echo '<th scope="row">' . esc_html( Xtra_Plugin::hour_label( $hour ) ) . '</th>';
-			foreach ( $days as $dow ) {
+			foreach ( $active_days as $dow ) {
 				$key = $dow . '-' . $hour;
 				$row = $live[ $key ] ?? null;
-				self::cell( $dow, $hour, $row, $rate );
+				// Check if shown on public grid
+				if ( ! Xtra_Cpt::is_shown( $schedule, $dow, $hour ) ) {
+					// Empty cell spacer if another day in this row has it
+					echo '<td></td>';
+					continue;
+				}
+				// Check if marked as Paid / covered by outside funding or already sponsored on site (excluding pending)
+				if ( Xtra_Cpt::is_paid( $schedule, $dow, $hour ) || ( $row && in_array( $row->status, array( 'sponsored', 'cancelling' ), true ) ) ) {
+					$label = Xtra_Plugin::cell_label( $dow, $hour );
+					printf(
+						'<td class="xtra-cell xtra-cell-sponsored"><div class="xtra-cell-static" data-status="sponsored" aria-label="%s"><span class="xtra-cell-time">%s</span><span class="xtra-cell-state">%s</span></div></td>',
+						esc_attr( sprintf( /* translators: cell */ __( 'Sponsored: %s', 'xtra' ), $label ) ),
+						esc_html( Xtra_Plugin::hour_label( $hour ) ),
+						esc_html__( 'Sponsored', 'xtra' )
+					);
+				} else {
+					self::cell( $dow, $hour, $row, $rate );
+				}
 			}
 			echo '</tr>';
 		}

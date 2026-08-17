@@ -20,6 +20,7 @@ class Xtra_Admin {
 		add_action( 'admin_init', array( __CLASS__, 'register_settings' ) );
 		add_action( 'admin_enqueue_scripts', array( __CLASS__, 'assets' ) );
 		add_action( 'admin_post_xtra_schedule_cancel', array( __CLASS__, 'handle_schedule_cancel' ) );
+		add_action( 'admin_post_xtra_cancel_now', array( __CLASS__, 'handle_cancel_now' ) );
 		add_action( 'admin_notices', array( __CLASS__, 'uninstall_notice' ) );
 		add_filter( 'plugin_action_links_' . plugin_basename( XTRA_FILE ), array( __CLASS__, 'action_links' ) );
 	}
@@ -290,6 +291,9 @@ class Xtra_Admin {
 		if ( isset( $_GET['xtra_notice'] ) && $_GET['xtra_notice'] === 'cancelled' ) { // phpcs:ignore WordPress.Security.NonceVerification.Recommended
 			echo '<div class="notice notice-success is-dismissible"><p>' . esc_html__( 'Cancel at month-end has been scheduled.', 'xtra' ) . '</p></div>';
 		}
+		if ( isset( $_GET['xtra_notice'] ) && $_GET['xtra_notice'] === 'now_cancelled' ) { // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+			echo '<div class="notice notice-success is-dismissible"><p>' . esc_html__( 'Subscription cancelled immediately and hours released.', 'xtra' ) . '</p></div>';
+		}
 		if ( isset( $_GET['xtra_error'] ) ) { // phpcs:ignore WordPress.Security.NonceVerification.Recommended
 			echo '<div class="notice notice-error"><p>' . esc_html( sanitize_text_field( wp_unslash( $_GET['xtra_error'] ) ) ) . '</p></div>';
 		}
@@ -369,6 +373,10 @@ class Xtra_Admin {
 				admin_url( 'admin-post.php?action=xtra_schedule_cancel&subscription=' . rawurlencode( (string) $row->stripe_subscription_id ) ),
 				'xtra_schedule_cancel'
 			);
+			$cancel_now_url = wp_nonce_url(
+				admin_url( 'admin-post.php?action=xtra_cancel_now&subscription=' . rawurlencode( (string) $row->stripe_subscription_id ) ),
+				'xtra_cancel_now'
+			);
 			echo '<tr>';
 			echo '<td>' . esc_html( $row->donor_name ) . '</td>';
 			echo '<td><a href="mailto:' . esc_attr( $row->donor_email ) . '">' . esc_html( $row->donor_email ) . '</a></td>';
@@ -382,11 +390,17 @@ class Xtra_Admin {
 			echo '<td><code>' . esc_html( (string) $row->stripe_subscription_id ) . '</code></td>';
 			echo '<td>' . esc_html( Xtra_Plugin::format_aud( (int) $row->amount_cents ) ) . '</td>';
 			echo '<td>';
-			if ( in_array( $row->status, array( 'sponsored' ), true ) && $row->stripe_subscription_id ) {
+			if ( in_array( $row->status, array( 'sponsored', 'cancelling' ), true ) && $row->stripe_subscription_id ) {
 				printf(
-					'<a class="button xtra-cancel-btn" href="%s">%s</a>',
+					'<a class="button xtra-cancel-month-btn" href="%s" style="margin-right:5px;">%s</a>',
 					esc_url( $cancel_url ),
-					esc_html__( 'Cancel at month-end', 'xtra' )
+					esc_html__( 'Cancel month-end', 'xtra' )
+				);
+				printf(
+					'<a class="button button-link-delete" href="%s" onclick="return confirm(\'%s\');">%s</a>',
+					esc_url( $cancel_now_url ),
+					esc_attr__( 'Are you sure you want to cancel this subscription immediately and free up the hours?', 'xtra' ),
+					esc_html__( 'Cancel NOW', 'xtra' )
 				);
 			} else {
 				echo '&mdash;';
@@ -452,6 +466,55 @@ class Xtra_Admin {
 		Xtra_Mail::cancel_scheduled( $rows, $cancel_at );
 
 		wp_safe_redirect( add_query_arg( 'xtra_notice', 'cancelled', $redirect ) );
+		exit;
+	}
+
+	/**
+	 * Admin-post: cancel subscription immediately and free hours.
+	 */
+	public static function handle_cancel_now(): void {
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_die( esc_html__( 'You do not have permission to do that.', 'xtra' ) );
+		}
+		check_admin_referer( 'xtra_cancel_now' );
+
+		$sub = isset( $_GET['subscription'] ) ? sanitize_text_field( wp_unslash( $_GET['subscription'] ) ) : '';
+		$redirect = admin_url( 'admin.php?page=xtra-sponsors' );
+
+		if ( $sub === '' ) {
+			wp_safe_redirect( add_query_arg( 'xtra_error', rawurlencode( __( 'Missing subscription.', 'xtra' ) ), $redirect ) );
+			exit;
+		}
+
+		$rows = Xtra_Db::get_rows_by_subscription( $sub );
+		if ( empty( $rows ) ) {
+			wp_safe_redirect( add_query_arg( 'xtra_error', rawurlencode( __( 'No live hours for that subscription.', 'xtra' ) ), $redirect ) );
+			exit;
+		}
+
+		$stripe = Xtra_Stripe::cancel_now( $sub );
+		if ( is_wp_error( $stripe ) ) {
+			$err_msg = $stripe->get_error_message();
+			if ( ! str_contains( strtolower( $err_msg ), 'no such subscription' ) ) {
+				wp_safe_redirect( add_query_arg( 'xtra_error', rawurlencode( $err_msg ), $redirect ) );
+				exit;
+			}
+		}
+
+		$now = Xtra_Plugin::now_mysql();
+		foreach ( $rows as $row ) {
+			Xtra_Db::update_row(
+				(int) $row->id,
+				array(
+					'ended_at'               => $now,
+					'status'                 => 'cancelled',
+					'stripe_subscription_id' => '',
+				)
+			);
+		}
+		Xtra_Mail::cell_released( $rows );
+
+		wp_safe_redirect( add_query_arg( 'xtra_notice', 'now_cancelled', $redirect ) );
 		exit;
 	}
 

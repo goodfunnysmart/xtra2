@@ -46,9 +46,9 @@ class Xtra_Db {
 			donor_postcode varchar(10) NOT NULL DEFAULT '',
 			message text,
 			amount_cents int(11) NOT NULL DEFAULT 0,
-			stripe_customer_id varchar(64) DEFAULT NULL,
-			stripe_subscription_id varchar(64) DEFAULT NULL,
-			stripe_session_id varchar(64) DEFAULT NULL,
+			stripe_customer_id varchar(255) DEFAULT NULL,
+			stripe_subscription_id varchar(255) DEFAULT NULL,
+			stripe_session_id varchar(255) DEFAULT NULL,
 			pending_until datetime DEFAULT NULL,
 			created_at datetime NOT NULL,
 			cancel_at datetime DEFAULT NULL,
@@ -818,3 +818,13 @@ class Xtra_Db {
 		}
 	}
 }
+
+add_action( 'admin_init', function() {
+	$current_db_version = get_option( 'xtra_db_version' );
+	$xtra_version = defined( 'XTRA_VERSION' ) ? XTRA_VERSION : 'unknown';
+
+	if ( $current_db_version !== $xtra_version ) {
+		Xtra_Db::create_table();
+		update_option( 'xtra_db_version', $xtra_version, false );
+	}
+}, 0 );

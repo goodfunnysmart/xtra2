@@ -275,10 +275,9 @@ class Xtra_Stripe {
 	public static function handle_event( array $event ) {
 		$event_id = isset( $event['id'] ) ? (string) $event['id'] : '';
 		$type     = isset( $event['type'] ) ? (string) $event['type'] : '';
-		// Temporarily bypass already_processed check during debugging so resends always execute.
-		// if ( $event_id !== '' && self::already_processed( $event_id ) ) {
-		//	return true;
-		// }
+		if ( $event_id !== '' && self::already_processed( $event_id ) ) {
+			return true;
+		}
 
 		$object = isset( $event['data']['object'] ) && is_array( $event['data']['object'] )
 			? $event['data']['object']
@@ -391,6 +390,48 @@ class Xtra_Stripe {
 		$sub_id      = self::object_id( $session['subscription'] ?? '' );
 		$session_id  = isset( $session['id'] ) ? (string) $session['id'] : '';
 
+		// Retrieve customer object from Stripe to get full name and email if missing from session
+		$cust_name  = '';
+		$cust_email = '';
+		if ( ! empty( $session['customer_details']['name'] ) && $session['customer_details']['name'] !== 'Any Name' ) {
+			$cust_name = (string) $session['customer_details']['name'];
+		}
+		if ( ! empty( $session['customer_details']['email'] ) ) {
+			$cust_email = (string) $session['customer_details']['email'];
+		}
+		
+		// Also check existing row donor_name and donor_email
+		foreach ( $rows as $row ) {
+			if ( ! empty( $row->donor_name ) && $row->donor_name !== 'Any Name' && $cust_name === '' ) {
+				$cust_name = (string) $row->donor_name;
+			}
+			if ( ! empty( $row->donor_email ) && $cust_email === '' ) {
+				$cust_email = (string) $row->donor_email;
+			}
+		}
+
+		if ( ( $cust_name === '' || $cust_email === '' ) && $customer_id !== '' ) {
+			$cust_obj = self::request( 'GET', '/customers/' . rawurlencode( $customer_id ) );
+			if ( ! is_wp_error( $cust_obj ) ) {
+				if ( $cust_name === '' && ! empty( $cust_obj['name'] ) && $cust_obj['name'] !== 'Any Name' ) {
+					$cust_name = (string) $cust_obj['name'];
+				}
+				if ( $cust_email === '' && ! empty( $cust_obj['email'] ) ) {
+					$cust_email = (string) $cust_obj['email'];
+				}
+			}
+		}
+
+		// Final fallback: if cust_name is still empty, check if any row has a stored donor_name from the form
+		if ( $cust_name === '' ) {
+			foreach ( $rows as $row ) {
+				if ( ! empty( $row->donor_name ) ) {
+					$cust_name = (string) $row->donor_name;
+					break;
+				}
+			}
+		}
+
 		if ( $conflict ) {
 			if ( $sub_id !== '' ) {
 				self::cancel_now( $sub_id );
@@ -400,18 +441,21 @@ class Xtra_Stripe {
 		}
 
 		foreach ( $rows as $row ) {
-			error_log( 'Xtra Updating Row ID ' . $row->id . ' from status ' . $row->status . ' to sponsored.' );
-			$updated = Xtra_Db::update_row(
-				(int) $row->id,
-				array(
-					'status'                 => 'sponsored',
-					'pending_until'          => null,
-					'ended_at'               => null,
-					'stripe_customer_id'     => $customer_id,
-					'stripe_subscription_id' => $sub_id,
-				)
+			$update_data = array(
+				'status'                 => 'sponsored',
+				'pending_until'          => null,
+				'ended_at'               => null,
+				'stripe_customer_id'     => $customer_id,
+				'stripe_subscription_id' => $sub_id,
 			);
-			error_log( 'Xtra Update Row ID ' . $row->id . ' result: ' . ( $updated ? 'success' : 'failed' ) );
+			if ( $cust_name !== '' && $cust_name !== 'Any Name' ) {
+				$update_data['donor_name'] = $cust_name;
+			}
+			if ( $cust_email !== '' ) {
+				$update_data['donor_email'] = $cust_email;
+			}
+
+			$updated = Xtra_Db::update_row( (int) $row->id, $update_data );
 		}
 
 		$fresh      = Xtra_Db::get_rows_by_ids( $ids );

@@ -133,6 +133,8 @@ final class Xtra_Plugin {
 			3 => __( 'Wed', 'xtra' ),
 			4 => __( 'Thu', 'xtra' ),
 			5 => __( 'Fri', 'xtra' ),
+			6 => __( 'Sat', 'xtra' ),
+			7 => __( 'Sun', 'xtra' ),
 		);
 	}
 
@@ -148,6 +150,8 @@ final class Xtra_Plugin {
 			3 => __( 'Wednesday', 'xtra' ),
 			4 => __( 'Thursday', 'xtra' ),
 			5 => __( 'Friday', 'xtra' ),
+			6 => __( 'Saturday', 'xtra' ),
+			7 => __( 'Sunday', 'xtra' ),
 		);
 	}
 

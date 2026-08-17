@@ -1,7 +1,7 @@
 (function () {
 	'use strict';
 	document.addEventListener('click', function (ev) {
-		var t = ev.target.closest('.xtra-cancel-btn');
+		var t = ev.target.closest('a[href*="action=xtra_schedule_cancel"]');
 		if (!t) {
 			return;
 		}

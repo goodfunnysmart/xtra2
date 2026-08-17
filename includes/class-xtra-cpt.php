@@ -18,6 +18,7 @@ class Xtra_Cpt {
 	public const META_TARGET   = 'weekly_hour_target';
 	public const META_RATE     = 'hourly_monthly_rate';
 	public const META_SCHEDULE = 'schedule';
+	public const META_VIDEO    = 'video_embed';
 
 	/**
 	 * Hooks.
@@ -97,16 +98,7 @@ class Xtra_Cpt {
 		if ( ! is_array( $raw ) ) {
 			return $default;
 		}
-		$days = array();
-		if ( isset( $raw['days'] ) && is_array( $raw['days'] ) ) {
-			foreach ( $raw['days'] as $d ) {
-				$d = (int) $d;
-				if ( $d >= 1 && $d <= 5 ) {
-					$days[] = $d;
-				}
-			}
-		}
-		$days  = array_values( array_unique( $days ) );
+		$days = array( 1, 2, 3, 4, 5, 6, 7 );
 		$start = isset( $raw['start'] ) ? (int) $raw['start'] : $default['start'];
 		$end   = isset( $raw['end'] ) ? (int) $raw['end'] : $default['end'];
 		$start = max( 0, min( 23, $start ) );
@@ -114,24 +106,101 @@ class Xtra_Cpt {
 		if ( $start >= $end ) {
 			$end = min( 24, $start + 1 );
 		}
-		if ( empty( $days ) ) {
-			$days = $default['days'];
+
+		$show_map = array();
+		$paid_map = array();
+		if ( isset( $raw['show'] ) && is_array( $raw['show'] ) ) {
+			$show_map = $raw['show'];
+			$paid_map = isset( $raw['paid'] ) && is_array( $raw['paid'] ) ? $raw['paid'] : array();
+		} elseif ( isset( $raw['sponsorable'] ) && is_array( $raw['sponsorable'] ) ) {
+			// Migrate legacy sponsorable format
+			foreach ( $raw['sponsorable'] as $k => $v ) {
+				if ( $v ) {
+					$show_map[ $k ] = true;
+				}
+			}
+		} else {
+			// Backward compatibility: default Mon-Fri start to end-1 are shown and available.
+			for ( $d = 1; $d <= 5; $d++ ) {
+				for ( $h = $start; $h < $end; $h++ ) {
+					$show_map[ $d . '-' . $h ] = true;
+				}
+			}
 		}
+
 		return array(
-			'days'  => $days,
-			'start' => $start,
-			'end'   => $end,
+			'days' => $days,
+			'show' => $show_map,
+			'paid' => $paid_map,
 		);
 	}
 
 	/**
-	 * Hours in [start, end).
+	 * Check if a cell is shown on the public grid.
+	 */
+	public static function is_shown( array $schedule, int $dow, int $hour ): bool {
+		if ( isset( $schedule['show'] ) && is_array( $schedule['show'] ) ) {
+			return ! empty( $schedule['show'][ $dow . '-' . $hour ] );
+		}
+		// Fallback for legacy
+		return self::is_sponsorable_legacy( $schedule, $dow, $hour );
+	}
+
+	/**
+	 * Check if a cell is marked as Paid / covered by outside funding.
+	 */
+	public static function is_paid( array $schedule, int $dow, int $hour ): bool {
+		if ( isset( $schedule['paid'] ) && is_array( $schedule['paid'] ) ) {
+			return ! empty( $schedule['paid'][ $dow . '-' . $hour ] );
+		}
+		return false;
+	}
+
+	/**
+	 * Legacy sponsorable check.
+	 */
+	public static function is_sponsorable_legacy( array $schedule, int $dow, int $hour ): bool {
+		if ( isset( $schedule['sponsorable'] ) && is_array( $schedule['sponsorable'] ) ) {
+			return ! empty( $schedule['sponsorable'][ $dow . '-' . $hour ] );
+		}
+		$start = isset( $schedule['start'] ) ? (int) $schedule['start'] : 9;
+		$end   = isset( $schedule['end'] ) ? (int) $schedule['end'] : 15;
+		return $dow >= 1 && $dow <= 5 && $hour >= $start && $hour < $end;
+	}
+
+	/**
+	 * Hours in schedule.
 	 *
 	 * @return array<int, int>
 	 */
 	public static function hours_in_schedule( array $schedule ): array {
 		$hours = array();
-		for ( $h = (int) $schedule['start']; $h < (int) $schedule['end']; $h++ ) {
+		$map   = ! empty( $schedule['show'] ) ? $schedule['show'] : ( ! empty( $schedule['sponsorable'] ) ? $schedule['sponsorable'] : array() );
+		if ( ! empty( $map ) ) {
+			$min_h = 24;
+			$max_h = -1;
+			foreach ( $map as $key => $val ) {
+				if ( $val ) {
+					$parts = explode( '-', $key );
+					if ( isset( $parts[1] ) ) {
+						$h = (int) $parts[1];
+						if ( $h < $min_h ) {
+							$min_h = $h;
+						}
+						if ( $h > $max_h ) {
+							$max_h = $h;
+						}
+					}
+				}
+			}
+			if ( $min_h <= $max_h ) {
+				for ( $h = $min_h; $h <= $max_h; $h++ ) {
+					$hours[] = $h;
+				}
+				return $hours;
+			}
+		}
+		for ( $h = 9; $h < 15; $h++ ) {
 			$hours[] = $h;
 		}
 		return $hours;
@@ -149,6 +218,7 @@ class Xtra_Cpt {
 			'weekly_hour_target'   => (int) get_post_meta( $post_id, self::META_TARGET, true ),
 			'hourly_monthly_rate'  => $rate,
 			'schedule'             => self::parse_schedule( get_post_meta( $post_id, self::META_SCHEDULE, true ) ),
+			'video_embed'          => (string) get_post_meta( $post_id, self::META_VIDEO, true ),
 		);
 	}
 
@@ -199,8 +269,6 @@ class Xtra_Cpt {
 		$frozen   = $post->ID && Xtra_Db::has_live_sponsorships( (int) $post->ID );
 		$rate_aud = $meta['hourly_monthly_rate'] > 0 ? number_format( $meta['hourly_monthly_rate'] / 100, 2, '.', '' ) : '45.00';
 		$target   = $meta['weekly_hour_target'] > 0 ? (int) $meta['weekly_hour_target'] : 35;
-		$start    = (int) $meta['schedule']['start'];
-		$end      = (int) $meta['schedule']['end'];
 
 		echo '<div class="xtra-metabox">';
 
@@ -211,12 +279,18 @@ class Xtra_Cpt {
 		);
 		echo '</p>';
 
-		echo '<p><label for="xtra_weekly_hour_target"><strong>' . esc_html__( 'Weekly hour target', 'xtra' ) . '</strong></label><br />';
+		echo '<p><label for="xtra_video_embed"><strong>' . esc_html__( 'Video embed URL (YouTube / Vimeo embed link)', 'xtra' ) . '</strong></label><br />';
+		$video_val = $meta['video_embed'];
+		if ( str_contains( $video_val, 'watch?v=' ) ) {
+			$video_val = str_replace( 'watch?v=', 'embed/', $video_val );
+		} elseif ( str_contains( $video_val, 'youtu.be/' ) ) {
+			$video_val = str_replace( 'youtu.be/', 'www.youtube.com/embed/', $video_val );
+		}
 		printf(
-			'<input type="number" min="1" max="168" id="xtra_weekly_hour_target" name="xtra_weekly_hour_target" value="%d" />',
-			$target
+			'<input type="url" class="widefat" id="xtra_video_embed" name="xtra_video_embed" value="%s" placeholder="https://www.youtube.com/embed/..." />',
+			esc_attr( $video_val )
 		);
-		echo '<span class="description"> ' . esc_html__( 'Denominator for “X of 35 hours sponsored”.', 'xtra' ) . '</span></p>';
+		echo '<span class="description"> ' . esc_html__( 'Optional video player embed URL displayed below the description and image.', 'xtra' ) . '</span></p>';
 
 		echo '<p><label for="xtra_hourly_monthly_rate"><strong>' . esc_html__( 'Monthly price per weekly hour (AUD)', 'xtra' ) . '</strong></label><br />';
 		printf(
@@ -225,35 +299,72 @@ class Xtra_Cpt {
 		);
 		echo '<span class="description"> ' . esc_html__( 'One cell = this amount each month. Two cells = twice this. Never multiplied by 4.33.', 'xtra' ) . '</span></p>';
 
-		echo '<fieldset class="xtra-schedule"><legend><strong>' . esc_html__( 'Schedule (Monday–Friday, one-hour cells)', 'xtra' ) . '</strong></legend>';
+		echo '<fieldset class="xtra-schedule"><legend><strong>' . esc_html__( 'Schedule Matrix (Hours & Days)', 'xtra' ) . '</strong></legend>';
 		if ( $frozen ) {
-			echo '<p class="xtra-frozen-notice">' . esc_html__( 'The schedule is frozen because at least one live sponsorship exists. Changing hours under active subscriptions is not supported.', 'xtra' ) . '</p>';
+			echo '<p class="xtra-frozen-notice">' . esc_html__( 'Note: Hours that currently have active live sponsorships are locked to protect existing subscriptions. You can freely add new hours or days!', 'xtra' ) . '</p>';
 		}
-		$disabled = $frozen ? ' disabled="disabled"' : '';
-		echo '<p><label for="xtra_schedule_start">' . esc_html__( 'Start hour', 'xtra' ) . '</label> ';
-		echo '<select id="xtra_schedule_start" name="xtra_schedule_start"' . $disabled . '>';
-		for ( $h = 0; $h <= 23; $h++ ) {
-			printf(
-				'<option value="%d"%s>%s</option>',
-				$h,
-				selected( $start, $h, false ),
-				esc_html( Xtra_Plugin::hour_label( $h ) )
-			);
+
+		echo '<p><strong>' . esc_html__( 'Schedule Matrix (Tick Show to display on public grid, and Paid if covered by outside funding source)', 'xtra' ) . '</strong></p>';
+		echo '<div style="overflow-x:auto; margin-bottom: 1rem;"><table class="widefat" style="width:auto; min-width:700px;"><thead><tr><th>Hour</th>';
+		$day_names = Xtra_Plugin::day_names();
+		foreach ( $day_names as $num => $label ) {
+			echo '<th style="text-align:center;">' . esc_html( $label ) . '<br /><span style="font-size:10px; font-weight:normal; color:#666;">Show | Paid</span></th>';
 		}
-		echo '</select></p>';
-		echo '<p><label for="xtra_schedule_end">' . esc_html__( 'End hour (exclusive)', 'xtra' ) . '</label> ';
-		echo '<select id="xtra_schedule_end" name="xtra_schedule_end"' . $disabled . '>';
-		for ( $h = 1; $h <= 24; $h++ ) {
-			printf(
-				'<option value="%d"%s>%s</option>',
-				$h,
-				selected( $end, $h, false ),
-				esc_html( $h === 24 ? __( '24:00 (midnight)', 'xtra' ) : Xtra_Plugin::hour_label( $h ) )
-			);
+		echo '</tr></thead><tbody>';
+
+		$start_all = 6;
+		$end_all   = 22;
+		$sched_arr = $meta['schedule'];
+		for ( $h = $start_all; $h < $end_all; $h++ ) {
+			echo '<tr>';
+			echo '<td><strong>' . esc_html( Xtra_Plugin::hour_label( $h ) ) . '</strong></td>';
+			for ( $d = 1; $d <= 7; $d++ ) {
+				$is_shown = self::is_shown( $sched_arr, $d, $h );
+				$is_paid  = self::is_paid( $sched_arr, $d, $h );
+
+				// Check if this specific cell has a live sponsorship (excluding pending)
+				$cell_row = Xtra_Db::live_row_for_cell( (int) $post->ID, $d, $h );
+				if ( $cell_row && $cell_row->status === 'pending' ) {
+					$cell_row = null;
+				}
+				$cell_disabled = $cell_row ? ' disabled="disabled"' : '';
+
+				$effective_paid = $is_paid || $cell_row;
+				$chk_show = $is_shown ? ' checked="checked"' : '';
+				$chk_paid = $effective_paid ? ' checked="checked"' : '';
+				
+				$title_parts = array();
+				if ( $cell_row && ! empty( $cell_row->donor_name ) ) {
+					$title_parts[] = "Sponsored by '" . $cell_row->donor_name . "'";
+				} elseif ( $cell_row ) {
+					$title_parts[] = 'Sponsored via website';
+				}
+				if ( $is_paid ) {
+					$title_parts[] = 'Covered by Outside Funding';
+				}
+				if ( empty( $title_parts ) ) {
+					$title_parts[] = 'Covered by Outside Funding';
+				}
+				$title_attr = implode( ' | ', $title_parts );
+				$cell_note = ' title="' . esc_attr( $title_attr ) . '"';
+
+				printf(
+					'<td style="text-align:center; white-space:nowrap; %8$s"%7$s><label title="Show on grid"><input type="checkbox" name="xtra_show[%1$d_%2$d]" value="1"%3$s%4$s /></label> &nbsp; <label title="%9$s"><input type="checkbox" name="xtra_paid[%1$d_%2$d]" value="1"%5$s%4$s style="accent-color: #28a745;" /></label>%6$s</td>',
+					$d,
+					$h,
+					$chk_show,
+					$cell_disabled,
+					$chk_paid,
+					$cell_row ? '<input type="hidden" name="xtra_show[' . $d . '_' . $h . ']" value="1" /><input type="hidden" name="xtra_paid[' . $d . '_' . $h . ']" value="1" />' : '',
+					$cell_note,
+					( $is_paid || $cell_row ) ? 'background-color: #e6f4ea;' : '',
+					esc_attr( $title_attr )
+				);
+			}
+			echo '</tr>';
 		}
-		echo '</select>';
-		echo '<span class="description"> ' . esc_html__( '9:00 to 15:00 produces cells 9, 10, 11, 12, 13 and 14.', 'xtra' ) . '</span></p>';
-		echo '<p class="description">' . esc_html__( 'Days are Monday to Friday. Slot length is one hour.', 'xtra' ) . '</p>';
+		echo '</tbody></table></div>';
+		echo '<p class="description">' . esc_html__( 'Slot length is one hour. Public grid hours automatically wrap around your shown hours.', 'xtra' ) . '</p>';
 		echo '</fieldset>';
 
 		echo '</div>';
@@ -282,11 +393,8 @@ class Xtra_Cpt {
 		$org = isset( $_POST['xtra_org_name'] ) ? sanitize_text_field( wp_unslash( $_POST['xtra_org_name'] ) ) : '';
 		update_post_meta( $post_id, self::META_ORG, $org );
 
-		$target = isset( $_POST['xtra_weekly_hour_target'] ) ? absint( $_POST['xtra_weekly_hour_target'] ) : 0;
-		if ( $target < 1 ) {
-			$target = 1;
-		}
-		update_post_meta( $post_id, self::META_TARGET, $target );
+		$video = isset( $_POST['xtra_video_embed'] ) ? esc_url_raw( wp_unslash( $_POST['xtra_video_embed'] ) ) : '';
+		update_post_meta( $post_id, self::META_VIDEO, $video );
 
 		$aud = isset( $_POST['xtra_hourly_monthly_rate'] ) ? (float) wp_unslash( $_POST['xtra_hourly_monthly_rate'] ) : 0;
 		$cents = (int) round( $aud * 100 );
@@ -295,18 +403,56 @@ class Xtra_Cpt {
 		}
 		update_post_meta( $post_id, self::META_RATE, $cents );
 
-		if ( ! Xtra_Db::has_live_sponsorships( $post_id ) ) {
-			$start = isset( $_POST['xtra_schedule_start'] ) ? absint( $_POST['xtra_schedule_start'] ) : 9;
-			$end   = isset( $_POST['xtra_schedule_end'] ) ? absint( $_POST['xtra_schedule_end'] ) : 15;
-			$schedule = self::parse_schedule(
-				array(
-					'days'  => array( 1, 2, 3, 4, 5 ),
-					'start' => $start,
-					'end'   => $end,
-				)
-			);
-			update_post_meta( $post_id, self::META_SCHEDULE, wp_json_encode( $schedule ) );
+		$old_meta = self::get_meta( $post_id );
+		$old_schedule = $old_meta['schedule'];
+
+		$days = array( 1, 2, 3, 4, 5, 6, 7 );
+		if ( isset( $_POST['xtra_schedule_days'] ) && is_array( $_POST['xtra_schedule_days'] ) ) {
+			$days = array();
+			foreach ( $_POST['xtra_schedule_days'] as $d ) {
+				$d = (int) $d;
+				if ( $d >= 1 && $d <= 7 ) {
+					$days[] = $d;
+				}
+			}
 		}
+
+		$show_post = isset( $_POST['xtra_show'] ) && is_array( $_POST['xtra_show'] ) ? $_POST['xtra_show'] : array();
+		$paid_post = isset( $_POST['xtra_paid'] ) && is_array( $_POST['xtra_paid'] ) ? $_POST['xtra_paid'] : array();
+		
+		$show_map = array();
+		$paid_map = array();
+		for ( $h = 6; $h < 22; $h++ ) {
+			for ( $d = 1; $d <= 7; $d++ ) {
+				$key = $d . '_' . $h;
+				$cell_str = $d . '-' . $h;
+
+				// If this cell has a live sponsorship (excluding pending)
+				$has_live = Xtra_Db::live_row_for_cell( $post_id, $d, $h );
+				if ( $has_live && $has_live->status === 'pending' ) {
+					$has_live = null;
+				}
+				if ( $has_live ) {
+					$show_map[ $cell_str ] = true;
+					$paid_map[ $cell_str ] = isset( $old_schedule['paid'][ $cell_str ] ) ? $old_schedule['paid'][ $cell_str ] : true;
+					continue;
+				}
+
+				if ( ! empty( $show_post[ $key ] ) ) {
+					$show_map[ $cell_str ] = true;
+				}
+				if ( ! empty( $paid_post[ $key ] ) ) {
+					$paid_map[ $cell_str ] = true;
+				}
+			}
+		}
+
+		$schedule = array(
+			'days' => $days,
+			'show' => $show_map,
+			'paid' => $paid_map,
+		);
+		update_post_meta( $post_id, self::META_SCHEDULE, wp_json_encode( $schedule ) );
 	}
 
 	/**

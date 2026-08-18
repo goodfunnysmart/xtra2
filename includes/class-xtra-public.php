@@ -17,6 +17,7 @@ class Xtra_Public {
 	 */
 	public static function init(): void {
 		add_shortcode( 'sponsor_position', array( __CLASS__, 'shortcode' ) );
+		add_shortcode( 'sponsor_timeslot_grid', array( __CLASS__, 'timeslot_shortcode' ) );
 		add_action( 'wp_enqueue_scripts', array( __CLASS__, 'register_assets' ) );
 	}
 
@@ -38,7 +39,7 @@ class Xtra_Public {
 			true
 		);
 		$post = get_post();
-		if ( $post && has_shortcode( (string) $post->post_content, 'sponsor_position' ) ) {
+		if ( $post && ( has_shortcode( (string) $post->post_content, 'sponsor_position' ) || has_shortcode( (string) $post->post_content, 'sponsor_timeslot_grid' ) ) ) {
 			wp_enqueue_style( 'xtra-public' );
 			wp_enqueue_script( 'xtra-public' );
 		}
@@ -141,6 +142,306 @@ class Xtra_Public {
 		$schedule = $meta['schedule'];
 		self::render( $post, $meta, $days, $hours, $live, $sponsored, $target, $pct, $rate, $configured, $opts, $schedule );
 		return (string) ob_get_clean();
+	}
+
+	/**
+	 * [sponsor_timeslot_grid id="123"]
+	 *
+	 * @param array<string, string>|string $atts Attributes.
+	 */
+	public static function timeslot_shortcode( $atts ): string {
+		$atts = shortcode_atts(
+			array(
+				'id' => 0,
+			),
+			$atts,
+			'sponsor_timeslot_grid'
+		);
+		$position_id = absint( $atts['id'] );
+		if ( $position_id < 1 || get_post_type( $position_id ) !== Xtra_Cpt::POST_TYPE ) {
+			if ( current_user_can( 'manage_options' ) ) {
+				return '<p class="xtra-error">' . esc_html__( 'Xtra: that position was not found. Check the shortcode id.', 'xtra' ) . '</p>';
+			}
+			return '';
+		}
+
+		$post = get_post( $position_id );
+		if ( ! $post || $post->post_status !== 'publish' ) {
+			if ( current_user_can( 'manage_options' ) ) {
+				return '<p class="xtra-error">' . esc_html__( 'Xtra: this position is not published.', 'xtra' ) . '</p>';
+			}
+			return '';
+		}
+
+		wp_enqueue_style( 'xtra-public' );
+		wp_enqueue_script( 'xtra-public' );
+
+		// After Stripe Checkout, confirm payment here so the grid updates even if the webhook is delayed or unreachable (e.g. local dev).
+		if ( isset( $_GET['xtra_success'], $_GET['session_id'] ) ) { // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+			$stripe_session = sanitize_text_field( wp_unslash( (string) $_GET['session_id'] ) ); // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+			Xtra_Stripe::confirm_checkout_session( $stripe_session );
+		}
+
+		$meta      = Xtra_Cpt::get_meta( $position_id );
+		$schedule  = $meta['schedule'];
+		$hours     = Xtra_Cpt::hours_in_schedule( $schedule );
+		$days      = $schedule['days'];
+		$rate      = (int) $meta['hourly_monthly_rate'];
+		
+		$live      = Xtra_Db::live_cell_map( $position_id );
+		
+		// Calculate total shown slots as denominator, and total sponsored/paid slots as numerator
+		$total_shown = 0;
+		$sponsored   = 0;
+		foreach ( $hours as $hour ) {
+			foreach ( $days as $dow ) {
+				if ( Xtra_Cpt::is_shown( $schedule, $dow, $hour ) ) {
+					++$total_shown;
+					$key = $dow . '-' . $hour;
+					$row = $live[ $key ] ?? null;
+					if ( Xtra_Cpt::is_paid( $schedule, $dow, $hour ) || ( $row && in_array( $row->status, array( 'sponsored', 'cancelling' ), true ) ) ) {
+						++$sponsored;
+					}
+				}
+			}
+		}
+		$target = $total_shown > 0 ? $total_shown : 1;
+		$pct    = min( 100, (int) round( ( $sponsored / $target ) * 100 ) );
+
+		$opts     = Xtra_Plugin::options();
+		$configured = Xtra_Plugin::stripe_configured();
+
+		wp_localize_script(
+			'xtra-public',
+			'xtraPublic',
+			array(
+				'restUrl'      => esc_url_raw( rest_url( 'xtra/v1/' ) ),
+				'nonce'        => wp_create_nonce( 'wp_rest' ),
+				'positionId'   => $position_id,
+				'rateCents'    => $rate,
+				'rateLabel'    => Xtra_Plugin::format_aud( $rate ),
+				'configured'   => $configured,
+				'termsUrl'     => (string) $opts['terms_url'],
+				'returnUrl'    => esc_url_raw( get_permalink() ? get_permalink() : home_url( '/' ) ),
+				'i18n'         => array(
+					'continue'     => __( 'Continue', 'xtra' ),
+					'pay'          => __( 'Pay', 'xtra' ),
+					'hours'        => __( 'hours', 'xtra' ),
+					'hour'         => __( 'hour', 'xtra' ),
+					'monthly'      => __( 'Monthly total', 'xtra' ),
+					'selectPrompt' => __( 'Select hours on the grid to sponsor them every week.', 'xtra' ),
+					'notConfigured'=> __( 'Payments are not configured yet. You can view and select hours, but checkout is unavailable.', 'xtra' ),
+					'error'        => __( 'Something went wrong. Please try again.', 'xtra' ),
+					'back'         => __( 'Back to the grid', 'xtra' ),
+				),
+			)
+		);
+
+		ob_start();
+		$schedule = $meta['schedule'];
+		self::render_timeslot_grid( $post, $meta, $days, $hours, $live, $sponsored, $target, $pct, $rate, $configured, $opts, $schedule );
+		return (string) ob_get_clean();
+	}
+
+	/**
+	 * Markup for timeslot grid only (no title/description/image/video container).
+	 */
+	private static function render_timeslot_grid( WP_Post $post, array $meta, array $days, array $hours, array $live, int $sponsored, int $target, int $pct, int $rate, bool $configured, array $opts, array $schedule ): void {
+		$day_labels = Xtra_Plugin::day_labels();
+		$success   = isset( $_GET['xtra_success'] ); // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+		$cancelled = isset( $_GET['xtra_cancelled'] ); // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+
+		$permalink = get_permalink();
+		echo '<div class="xtra xtra-timeslot-only"';
+		echo ' data-position="' . esc_attr( (string) $post->ID ) . '"';
+		echo ' data-rest-url="' . esc_url( rest_url( 'xtra/v1/' ) ) . '"';
+		echo ' data-nonce="' . esc_attr( wp_create_nonce( 'wp_rest' ) ) . '"';
+		echo ' data-rate="' . esc_attr( (string) $rate ) . '"';
+		echo ' data-configured="' . ( $configured ? '1' : '0' ) . '"';
+		echo ' data-return-url="' . esc_url( $permalink ? $permalink : home_url( '/' ) ) . '"';
+		echo ' data-terms-url="' . esc_url( (string) $opts['terms_url'] ) . '"';
+		echo ' style="background:transparent; border:0; padding:0; box-shadow:none; max-width:none;"';
+		echo '>';
+
+		if ( $success ) {
+			echo '<div class="xtra-banner xtra-banner-ok" role="status">';
+			echo '<p><strong>' . esc_html__( 'Thank you.', 'xtra' ) . '</strong> ';
+			echo esc_html__( 'Thank you for sponsoring. Your hours are shown as sponsored on the grid below. You will receive a confirmation email shortly.', 'xtra' );
+			echo '</p></div>';
+		} elseif ( $cancelled ) {
+			echo '<div class="xtra-banner xtra-banner-info" role="status">';
+			echo '<p>' . esc_html__( 'Checkout was cancelled. Your reserved hours will be released shortly if you do not complete payment.', 'xtra' ) . '</p>';
+			echo '</div>';
+		}
+
+		if ( ! $configured ) {
+			echo '<div class="xtra-banner xtra-banner-warn" role="status">';
+			echo '<p>' . esc_html__( 'Payments are not configured yet. You can view and select hours, but checkout is unavailable.', 'xtra' ) . '</p>';
+			echo '</div>';
+		}
+
+		echo '<div class="xtra-progress" aria-label="' . esc_attr__( 'Sponsorship progress', 'xtra' ) . '">';
+		echo '<p class="xtra-progress-label">';
+		printf(
+			/* translators: 1: sponsored hours, 2: target */
+			esc_html__( '%1$s of %2$s hours sponsored', 'xtra' ),
+			esc_html( (string) $sponsored ),
+			esc_html( (string) $target )
+		);
+		echo '</p>';
+		echo '<div class="xtra-progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' . esc_attr( (string) $pct ) . '">';
+		echo '<div class="xtra-progress-fill" style="width:' . esc_attr( (string) $pct ) . '%"></div>';
+		echo '</div></div>';
+
+		// Filter days to only those that have at least one shown hour
+		$active_days = array();
+		foreach ( $days as $dow ) {
+			$has_shown = false;
+			foreach ( $hours as $hour ) {
+				if ( Xtra_Cpt::is_shown( $schedule, $dow, $hour ) ) {
+					$has_shown = true;
+					break;
+				}
+			}
+			if ( $has_shown ) {
+				$active_days[] = $dow;
+			}
+		}
+
+		echo '<div class="xtra-layout">';
+		echo '<div class="xtra-grid-wrap">';
+		echo '<table class="xtra-grid" role="grid">';
+		echo '<thead><tr><th class="xtra-grid-corner"></th>';
+		foreach ( $active_days as $dow ) {
+			echo '<th scope="col">' . esc_html( $day_labels[ $dow ] ?? (string) $dow ) . '</th>';
+		}
+		echo '</tr></thead><tbody>';
+
+		foreach ( $hours as $hour ) {
+			// Check if this hour has at least one active day shown
+			$has_hour_shown = false;
+			foreach ( $active_days as $dow ) {
+				if ( Xtra_Cpt::is_shown( $schedule, $dow, $hour ) ) {
+					$has_hour_shown = true;
+					break;
+				}
+			}
+			if ( ! $has_hour_shown ) {
+				continue; // Skip hour rows that have no shown cells
+			}
+
+			echo '<tr>';
+			echo '<th scope="row">' . esc_html( Xtra_Plugin::hour_label( $hour ) ) . '</th>';
+			foreach ( $active_days as $dow ) {
+				$key = $dow . '-' . $hour;
+				$row = $live[ $key ] ?? null;
+				// Check if shown on public grid
+				if ( ! Xtra_Cpt::is_shown( $schedule, $dow, $hour ) ) {
+					// Empty cell spacer if another day in this row has it
+					echo '<td></td>';
+					continue;
+				}
+				// Check if marked as Paid / covered by outside funding or already sponsored on site (excluding pending)
+				if ( Xtra_Cpt::is_paid( $schedule, $dow, $hour ) || ( $row && in_array( $row->status, array( 'sponsored', 'cancelling' ), true ) ) ) {
+					$label = Xtra_Plugin::cell_label( $dow, $hour );
+					printf(
+						'<td class="xtra-cell xtra-cell-sponsored"><div class="xtra-cell-static" data-status="sponsored" aria-label="%s"><span class="xtra-cell-time">%s</span><span class="xtra-cell-state">%s</span></div></td>',
+						esc_attr( sprintf( /* translators: cell */ __( 'Sponsored: %s', 'xtra' ), $label ) ),
+						esc_html( Xtra_Plugin::hour_label( $hour ) ),
+						esc_html__( 'Sponsored', 'xtra' )
+					);
+				} else {
+					self::cell( $dow, $hour, $row, $rate );
+				}
+			}
+			echo '</tr>';
+		}
+
+		echo '</tbody></table>';
+		echo '<ul class="xtra-legend">';
+		echo '<li><span class="xtra-swatch xtra-swatch-avail"></span>' . esc_html__( 'Available', 'xtra' ) . '</li>';
+		echo '<li><span class="xtra-swatch xtra-swatch-sel"></span>' . esc_html__( 'Selected', 'xtra' ) . '</li>';
+		echo '<li><span class="xtra-swatch xtra-swatch-pend"></span>' . esc_html__( 'Reserved', 'xtra' ) . '</li>';
+		echo '<li><span class="xtra-swatch xtra-swatch-spon"></span>' . esc_html__( 'Sponsored', 'xtra' ) . '</li>';
+		echo '</ul>';
+		echo '</div>';
+
+		echo '<aside class="xtra-sidebar">';
+		echo '<div class="xtra-card" data-panel="select">';
+		echo '<h3>' . esc_html__( 'Your hours', 'xtra' ) . '</h3>';
+		echo '<p class="xtra-sidebar-prompt">' . esc_html__( 'Select hours on the grid to sponsor them every week.', 'xtra' ) . '</p>';
+		echo '<p class="xtra-sidebar-count"><span data-count>0</span> <span data-count-label>' . esc_html__( 'hours', 'xtra' ) . '</span></p>';
+		echo '<p class="xtra-sidebar-total">' . esc_html__( 'Monthly total', 'xtra' ) . ' <strong data-total>' . esc_html( Xtra_Plugin::format_aud( 0 ) ) . '</strong></p>';
+		echo '<p class="xtra-sidebar-note">' . esc_html__( 'Each hour is billed monthly, not multiplied by weeks in a month.', 'xtra' ) . '</p>';
+		echo '<button type="button" class="xtra-btn xtra-btn-primary" data-action="continue"' . disabled( $configured, false, false ) . '>';
+		echo esc_html__( 'Continue', 'xtra' );
+		echo '</button>';
+		echo '<p class="xtra-form-error" data-error hidden></p>';
+		echo '</div>';
+
+		echo '<div class="xtra-card xtra-checkout" data-panel="checkout" hidden>';
+		echo '<button type="button" class="xtra-back" data-action="back">&larr; ' . esc_html__( 'Back to the grid', 'xtra' ) . '</button>';
+		echo '<h3>' . esc_html__( 'Checkout', 'xtra' ) . '</h3>';
+		echo '<p class="xtra-checkout-summary" data-checkout-summary></p>';
+		echo '<form class="xtra-form" data-form="checkout" novalidate>';
+		echo '<div class="xtra-fields-2">';
+		echo '<p><label for="xtra_first">' . esc_html__( 'First name', 'xtra' ) . '</label>';
+		echo '<input type="text" id="xtra_first" name="first_name" required autocomplete="given-name" /></p>';
+		echo '<p><label for="xtra_last">' . esc_html__( 'Last name', 'xtra' ) . '</label>';
+		echo '<input type="text" id="xtra_last" name="last_name" required autocomplete="family-name" /></p>';
+		echo '</div>';
+		echo '<p><label for="xtra_email">' . esc_html__( 'Email', 'xtra' ) . '</label>';
+		echo '<input type="email" id="xtra_email" name="email" required autocomplete="email" /></p>';
+		echo '<fieldset class="xtra-address"><legend>' . esc_html__( 'Postal address (for donation receipts)', 'xtra' ) . '</legend>';
+		echo '<p><label for="xtra_address">' . esc_html__( 'Street address', 'xtra' ) . '</label>';
+		echo '<input type="text" id="xtra_address" name="address" required autocomplete="street-address" /></p>';
+		echo '<div class="xtra-fields-2">';
+		echo '<p><label for="xtra_suburb">' . esc_html__( 'Suburb', 'xtra' ) . '</label>';
+		echo '<input type="text" id="xtra_suburb" name="suburb" required autocomplete="address-level2" /></p>';
+		echo '<p><label for="xtra_state">' . esc_html__( 'State', 'xtra' ) . '</label>';
+		echo '<select id="xtra_state" name="state" required autocomplete="address-level1">';
+		echo '<option value="">' . esc_html__( 'Select…', 'xtra' ) . '</option>';
+		foreach ( array( 'ACT', 'NSW', 'NT', 'QLD', 'SA', 'TAS', 'VIC', 'WA' ) as $st ) {
+			printf( '<option value="%s">%s</option>', esc_attr( $st ), esc_html( $st ) );
+		}
+		echo '</select></p>';
+		echo '</div>';
+		echo '<p><label for="xtra_postcode">' . esc_html__( 'Postcode', 'xtra' ) . '</label>';
+		echo '<input type="text" id="xtra_postcode" name="postcode" required autocomplete="postal-code" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" /></p>';
+		echo '</fieldset>';
+		echo '<p><label for="xtra_phone">' . esc_html__( 'Phone (optional)', 'xtra' ) . '</label>';
+		echo '<input type="tel" id="xtra_phone" name="phone" autocomplete="tel" /></p>';
+		echo '<p><label for="xtra_message">' . esc_html__( 'Private message to the organisation (optional)', 'xtra' ) . '</label>';
+		echo '<textarea id="xtra_message" name="message" rows="3"></textarea></p>';
+		echo '<p class="xtra-terms"><label>';
+		echo '<input type="checkbox" name="terms" value="1" required /> ';
+		$terms_url = (string) $opts['terms_url'];
+		if ( $terms_url !== '' ) {
+			printf(
+				/* translators: %s terms URL */
+				wp_kses(
+					__( 'I agree to the <a href="%s" target="_blank" rel="noopener noreferrer">terms of this monthly sponsorship</a>.', 'xtra' ),
+					array(
+						'a' => array(
+							'href'   => array(),
+							'target' => array(),
+							'rel'    => array(),
+						),
+					)
+				),
+				esc_url( $terms_url )
+			);
+		} else {
+			echo esc_html__( 'I agree to the terms of this monthly sponsorship. Hours are billed monthly until cancelled at the end of a calendar month.', 'xtra' );
+		}
+		echo '</label></p>';
+		echo '<button type="submit" class="xtra-btn xtra-btn-primary">' . esc_html__( 'Pay', 'xtra' ) . '</button>';
+		echo '<p class="xtra-form-error" data-error hidden></p>';
+		echo '</form>';
+		echo '</div>';
+		echo '</aside>';
+		echo '</div>';
+		echo '</div>';
 	}
 
 	/**

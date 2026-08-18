@@ -54,16 +54,17 @@ class Xtra_Cpt {
 			self::POST_TYPE,
 			array(
 				'labels'          => $labels,
-				'public'          => false,
+				'public'          => true,
+				'publicly_queryable' => true,
 				'show_ui'         => true,
 				'show_in_menu'    => 'xtra',
-				'show_in_rest'    => false,
+				'show_in_rest'    => true,
 				'capability_type' => 'post',
 				'map_meta_cap'    => true,
 				'supports'        => array( 'title', 'editor', 'thumbnail' ),
 				'has_archive'     => false,
-				'rewrite'         => false,
-				'query_var'       => false,
+				'rewrite'         => array( 'slug' => 'staff-position' ),
+				'query_var'       => true,
 			)
 		);
 	}
@@ -250,12 +251,17 @@ class Xtra_Cpt {
 	public static function render_shortcode_metabox( WP_Post $post ): void {
 		if ( $post->ID ) {
 			printf(
-				'<p><code>[sponsor_position id="%d"]</code></p><p class="description">%s</p>',
+				'<p><strong>%s</strong><br /><code>[sponsor_position id="%d"]</code></p>' .
+				'<p><strong>%s</strong><br /><code>[sponsor_timeslot_grid id="%d"]</code></p>' .
+				'<p class="description">%s</p>',
+				esc_html__( 'Full Component Shortcode:', 'xtra' ),
 				(int) $post->ID,
-				esc_html__( 'Paste this on any page. The public grid never shows donor names.', 'xtra' )
+				esc_html__( 'Timeslot Grid Only Shortcode:', 'xtra' ),
+				(int) $post->ID,
+				esc_html__( 'Paste on any page. The public grid never shows donor names.', 'xtra' )
 			);
 		} else {
-			echo '<p>' . esc_html__( 'Save the position to get a shortcode.', 'xtra' ) . '</p>';
+			echo '<p>' . esc_html__( 'Save the position to get shortcodes.', 'xtra' ) . '</p>';
 		}
 	}
 
@@ -466,10 +472,11 @@ class Xtra_Cpt {
 		foreach ( $columns as $key => $label ) {
 			$new[ $key ] = $label;
 			if ( $key === 'title' ) {
-				$new['xtra_org']      = __( 'Organisation', 'xtra' );
-				$new['xtra_rate']     = __( 'Rate / hour', 'xtra' );
-				$new['xtra_progress'] = __( 'Sponsored', 'xtra' );
-				$new['xtra_shortcode'] = __( 'Shortcode', 'xtra' );
+				$new['xtra_org']            = __( 'Organisation', 'xtra' );
+				$new['xtra_rate']           = __( 'Rate / hour', 'xtra' );
+				$new['xtra_progress']       = __( 'Sponsored', 'xtra' );
+				$new['xtra_shortcode']      = __( 'Shortcode (Full)', 'xtra' );
+				$new['xtra_grid_shortcode'] = __( 'Shortcode (Grid)', 'xtra' );
 			}
 		}
 		return $new;
@@ -494,6 +501,9 @@ class Xtra_Cpt {
 				break;
 			case 'xtra_shortcode':
 				printf( '<code>[sponsor_position id="%d"]</code>', $post_id );
+				break;
+			case 'xtra_grid_shortcode':
+				printf( '<code>[sponsor_timeslot_grid id="%d"]</code>', $post_id );
 				break;
 		}
 	}

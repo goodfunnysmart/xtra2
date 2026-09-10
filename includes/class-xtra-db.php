@@ -384,7 +384,7 @@ class Xtra_Db {
 		}
 		$table    = self::table();
 		$in       = implode( ',', array_fill( 0, count( $ids ), '%d' ) );
-		$prepared = $wpdb->prepare( "SELECT * FROM {$table} WHERE id IN ({$in})", $ids );
+		$prepared = $wpdb->prepare( "SELECT * FROM {$table} WHERE id IN ({$in})", ...$ids );
 		$rows     = $wpdb->get_results( $prepared );
 		return is_array( $rows ) ? $rows : array();
 	}

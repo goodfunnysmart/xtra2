@@ -372,8 +372,8 @@ class Xtra_Stripe {
 			}
 		}
 		if ( $already ) {
-			$fresh = Xtra_Db::get_rows_by_ids( $ids );
-			self::maybe_send_payment_confirmed( $fresh, '', $session_id );
+			// Prefer in-memory rows (already sponsored); get_rows_by_ids can return empty on some WP installs.
+			self::maybe_send_payment_confirmed( $rows, '', $session_id );
 			return true;
 		}
 
@@ -462,6 +462,23 @@ class Xtra_Stripe {
 		}
 
 		$fresh = Xtra_Db::get_rows_by_ids( $ids );
+		if ( empty( $fresh ) ) {
+			// Fallback: patch in-memory rows so confirmation mail is not skipped if re-fetch fails.
+			foreach ( $rows as $row ) {
+				$row->status                 = 'sponsored';
+				$row->pending_until          = null;
+				$row->ended_at               = null;
+				$row->stripe_customer_id     = $customer_id;
+				$row->stripe_subscription_id = $sub_id;
+				if ( $cust_name !== '' && $cust_name !== 'Any Name' ) {
+					$row->donor_name = $cust_name;
+				}
+				if ( $cust_email !== '' ) {
+					$row->donor_email = $cust_email;
+				}
+			}
+			$fresh = $rows;
+		}
 		self::maybe_send_payment_confirmed( $fresh, '', $session_id );
 		return true;
 	}
@@ -475,11 +492,11 @@ class Xtra_Stripe {
 	 */
 	private static function maybe_send_payment_confirmed( array $rows, string $portal, string $session_id ): void {
 		if ( empty( $rows ) ) {
-			error_log( 'Xtra: payment_confirmed skipped — empty rows for session ' . $session_id );
+			error_log( 'Xtra: payment_confirmed skipped — empty rows (0) for session ' . $session_id );
 			return;
 		}
 		if ( $session_id === '' ) {
-			error_log( 'Xtra: payment_confirmed skipped — empty session_id' );
+			error_log( 'Xtra: payment_confirmed skipped — empty session_id (rows=' . count( $rows ) . ')' );
 			return;
 		}
 		$key = 'xtra_paid_mail_' . $session_id;

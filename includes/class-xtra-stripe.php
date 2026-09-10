@@ -372,9 +372,8 @@ class Xtra_Stripe {
 			}
 		}
 		if ( $already ) {
-			$fresh  = Xtra_Db::get_rows_by_ids( $ids );
-			$portal = ( $customer_id !== '' ) ? self::portal_url( $customer_id, home_url( '/' ) ) : '';
-			self::maybe_send_payment_confirmed( $fresh, $portal, $session_id );
+			$fresh = Xtra_Db::get_rows_by_ids( $ids );
+			self::maybe_send_payment_confirmed( $fresh, '', $session_id );
 			return true;
 		}
 
@@ -462,9 +461,8 @@ class Xtra_Stripe {
 			$updated = Xtra_Db::update_row( (int) $row->id, $update_data );
 		}
 
-		$fresh  = Xtra_Db::get_rows_by_ids( $ids );
-		$portal = ( $customer_id !== '' ) ? self::portal_url( $customer_id, home_url( '/' ) ) : '';
-		self::maybe_send_payment_confirmed( $fresh, $portal, $session_id );
+		$fresh = Xtra_Db::get_rows_by_ids( $ids );
+		self::maybe_send_payment_confirmed( $fresh, '', $session_id );
 		return true;
 	}
 

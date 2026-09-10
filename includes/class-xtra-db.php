@@ -45,6 +45,8 @@ class Xtra_Db {
 			donor_state varchar(10) NOT NULL DEFAULT '',
 			donor_postcode varchar(10) NOT NULL DEFAULT '',
 			message text,
+			opt_in_news tinyint(1) NOT NULL DEFAULT 1,
+			opt_in_hour_start tinyint(1) NOT NULL DEFAULT 0,
 			amount_cents int(11) NOT NULL DEFAULT 0,
 			stripe_customer_id varchar(255) DEFAULT NULL,
 			stripe_subscription_id varchar(255) DEFAULT NULL,
@@ -345,19 +347,21 @@ class Xtra_Db {
 			$ok = $wpdb->insert(
 				$table,
 				array(
-					'position_id'  => $position_id,
-					'dow'          => (int) $cell['dow'],
-					'hour'         => (int) $cell['hour'],
-					'status'       => 'pending',
-					'donor_name'   => '',
-					'donor_email'  => '',
-					'donor_phone'  => null,
-					'message'      => null,
-					'amount_cents' => $amount_cents,
-					'pending_until'=> $until,
-					'created_at'   => $now,
+					'position_id'       => $position_id,
+					'dow'               => (int) $cell['dow'],
+					'hour'              => (int) $cell['hour'],
+					'status'            => 'pending',
+					'donor_name'        => '',
+					'donor_email'       => '',
+					'donor_phone'       => null,
+					'message'           => null,
+					'opt_in_news'       => 1,
+					'opt_in_hour_start' => 0,
+					'amount_cents'      => $amount_cents,
+					'pending_until'     => $until,
+					'created_at'        => $now,
 				),
-				array( '%d', '%d', '%d', '%s', '%s', '%s', '%s', '%s', '%d', '%s', '%s' )
+				array( '%d', '%d', '%d', '%s', '%s', '%s', '%s', '%s', '%d', '%d', '%d', '%s', '%s' )
 			);
 			if ( ! $ok ) {
 				$wpdb->query( 'ROLLBACK' );
@@ -468,13 +472,15 @@ class Xtra_Db {
 		global $wpdb;
 		$table = self::table();
 		$allowed = array(
-			'donor_name'     => '%s',
-			'donor_email'    => '%s',
-			'donor_phone'    => '%s',
-			'donor_address'  => '%s',
-			'donor_suburb'   => '%s',
-			'donor_state'    => '%s',
-			'donor_postcode' => '%s',
+			'donor_name'         => '%s',
+			'donor_email'        => '%s',
+			'donor_phone'        => '%s',
+			'donor_address'      => '%s',
+			'donor_suburb'       => '%s',
+			'donor_state'        => '%s',
+			'donor_postcode'     => '%s',
+			'opt_in_news'        => '%d',
+			'opt_in_hour_start'  => '%d',
 		);
 		$set    = array();
 		$values = array();
@@ -817,7 +823,31 @@ class Xtra_Db {
 			);
 		}
 	}
+
+	/**
+	 * Live sponsored rows opted in to hour-start emails for a given cell.
+	 *
+	 * @return array<int, object>
+	 */
+	public static function rows_for_hour_start( int $dow, int $hour ): array {
+		global $wpdb;
+		$table = self::table();
+		$rows  = $wpdb->get_results(
+			$wpdb->prepare(
+				"SELECT * FROM {$table}
+				WHERE ended_at IS NULL
+					AND status IN ('sponsored', 'cancelling')
+					AND opt_in_hour_start = 1
+					AND dow = %d
+					AND hour = %d",
+				$dow,
+				$hour
+			)
+		);
+		return is_array( $rows ) ? $rows : array();
+	}
 }
+
 
 add_action( 'admin_init', function() {
 	$current_db_version = get_option( 'xtra_db_version' );
@@ -827,4 +857,4 @@ add_action( 'admin_init', function() {
 		Xtra_Db::create_table();
 		update_option( 'xtra_db_version', $xtra_version, false );
 	}
-}, 0 );
+});

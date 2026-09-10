@@ -111,13 +111,17 @@ class Xtra_Stripe {
 			'client_reference_id' => 'xtra-' . $position_id . '-' . $ids[0],
 			'customer_email'      => (string) $donor['email'],
 			'metadata'            => array(
-				'xtra_sponsorship_ids' => $id_csv,
-				'xtra_position_id'     => (string) $position_id,
+				'xtra_sponsorship_ids'   => $id_csv,
+				'xtra_position_id'       => (string) $position_id,
+				'xtra_opt_in_news'       => ( ! empty( $donor['opt_in_news'] ) ) ? '1' : '0',
+				'xtra_opt_in_hour_start' => ( ! empty( $donor['opt_in_hour_start'] ) ) ? '1' : '0',
 			),
 			'subscription_data'   => array(
 				'metadata' => array(
-					'xtra_sponsorship_ids' => $id_csv,
-					'xtra_position_id'     => (string) $position_id,
+					'xtra_sponsorship_ids'   => $id_csv,
+					'xtra_position_id'       => (string) $position_id,
+					'xtra_opt_in_news'       => ( ! empty( $donor['opt_in_news'] ) ) ? '1' : '0',
+					'xtra_opt_in_hour_start' => ( ! empty( $donor['opt_in_hour_start'] ) ) ? '1' : '0',
 				),
 			),
 			'line_items'          => array(
@@ -158,6 +162,8 @@ class Xtra_Stripe {
 					'donor_state'       => (string) ( $donor['state'] ?? '' ),
 					'donor_postcode'    => (string) ( $donor['postcode'] ?? '' ),
 					'message'           => $donor['message'] !== '' ? (string) $donor['message'] : null,
+					'opt_in_news'       => (int) ( $donor['opt_in_news'] ?? 1 ) ? 1 : 0,
+					'opt_in_hour_start' => (int) ( $donor['opt_in_hour_start'] ?? 0 ) ? 1 : 0,
 					'pending_until'     => $until,
 				)
 			);

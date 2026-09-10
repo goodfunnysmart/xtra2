@@ -258,6 +258,7 @@ class Xtra_Admin {
 			(int) $opts['pending_minutes']
 		);
 		echo '<p class="description">' . esc_html__( 'Default 15. Abandoned checkouts release hours after this window. Stripe Checkout sessions cannot expire sooner than 30 minutes; if payment lands after expiry and the cell was retaken, the webhook will not double-book.', 'xtra' ) . '</p>';
+		echo '<p class="description">' . esc_html__( 'Hour-start emails (for sponsors who opt in) need WP-Cron, or a real system cron hitting wp-cron.php, roughly every 5 minutes. The plugin registers a 5-minute schedule for that.', 'xtra' ) . '</p>';
 		echo '</td></tr>';
 		echo '<tr><th><label for="xtra_terms">' . esc_html__( 'Terms URL', 'xtra' ) . '</label></th><td>';
 		printf(
@@ -395,11 +396,13 @@ class Xtra_Admin {
 		echo '<th>' . esc_html__( 'Status', 'xtra' ) . '</th>';
 		echo '<th>' . esc_html__( 'Subscription', 'xtra' ) . '</th>';
 		echo '<th>' . esc_html__( 'Monthly', 'xtra' ) . '</th>';
+		echo '<th>' . esc_html__( 'News', 'xtra' ) . '</th>';
+		echo '<th>' . esc_html__( 'Hour emails', 'xtra' ) . '</th>';
 		echo '<th>' . esc_html__( 'Actions', 'xtra' ) . '</th>';
 		echo '</tr></thead><tbody>';
 
 		if ( empty( $result['rows'] ) ) {
-			echo '<tr><td colspan="8">' . esc_html__( 'No sponsorships yet.', 'xtra' ) . '</td></tr>';
+			echo '<tr><td colspan="10">' . esc_html__( 'No sponsorships yet.', 'xtra' ) . '</td></tr>';
 		}
 
 		foreach ( $result['rows'] as $row ) {
@@ -427,6 +430,10 @@ class Xtra_Admin {
 			echo '</td>';
 			echo '<td><code>' . esc_html( (string) $row->stripe_subscription_id ) . '</code></td>';
 			echo '<td>' . esc_html( Xtra_Plugin::format_aud( (int) $row->amount_cents ) ) . '</td>';
+			$news = isset( $row->opt_in_news ) ? (int) $row->opt_in_news : 1;
+			$hour = isset( $row->opt_in_hour_start ) ? (int) $row->opt_in_hour_start : 0;
+			echo '<td>' . esc_html( $news ? __( 'Yes', 'xtra' ) : __( 'No', 'xtra' ) ) . '</td>';
+			echo '<td>' . esc_html( $hour ? __( 'Yes', 'xtra' ) : __( 'No', 'xtra' ) ) . '</td>';
 			echo '<td>';
 			if ( in_array( $row->status, array( 'sponsored', 'cancelling' ), true ) ) {
 				$resend_url = wp_nonce_url(

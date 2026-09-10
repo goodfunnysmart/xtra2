@@ -200,6 +200,8 @@
 					postcode: fd.get('postcode') || '',
 					phone: fd.get('phone') || '',
 					message: fd.get('message') || '',
+					opt_in_news: fd.get('opt_in_news') ? 1 : 0,
+					opt_in_hour_start: fd.get('opt_in_hour_start') ? 1 : 0,
 					terms: true,
 					return_url: cfg.returnUrl
 				})

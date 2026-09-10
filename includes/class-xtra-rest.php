@@ -191,6 +191,12 @@ class Xtra_Rest {
 		$terms   = (bool) $request->get_param( 'terms' );
 		$return  = esc_url_raw( (string) $request->get_param( 'return_url' ) );
 
+		// Defaults if absent: news on, hour-start off.
+		$opt_in_news_param = $request->get_param( 'opt_in_news' );
+		$opt_in_news       = null === $opt_in_news_param ? true : (bool) $opt_in_news_param;
+		$opt_in_hour_param = $request->get_param( 'opt_in_hour_start' );
+		$opt_in_hour_start = null === $opt_in_hour_param ? false : (bool) $opt_in_hour_param;
+
 		if ( $first === '' || $last === '' ) {
 			return new WP_Error( 'name', __( 'Please enter your first and last name.', 'xtra' ), array( 'status' => 400 ) );
 		}
@@ -228,14 +234,16 @@ class Xtra_Rest {
 		}
 
 		$donor = array(
-			'name'     => trim( $first . ' ' . $last ),
-			'email'    => $email,
-			'phone'    => $phone,
-			'address'  => $address,
-			'suburb'   => $suburb,
-			'state'    => $state,
-			'postcode' => $postcode,
-			'message'  => $message,
+			'name'             => trim( $first . ' ' . $last ),
+			'email'            => $email,
+			'phone'            => $phone,
+			'address'          => $address,
+			'suburb'           => $suburb,
+			'state'            => $state,
+			'postcode'         => $postcode,
+			'message'          => $message,
+			'opt_in_news'      => $opt_in_news ? 1 : 0,
+			'opt_in_hour_start'=> $opt_in_hour_start ? 1 : 0,
 		);
 
 		$sep     = str_contains( $return, '?' ) ? '&' : '?';

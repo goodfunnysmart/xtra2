@@ -205,6 +205,11 @@ class Xtra_Rest {
 			);
 		}
 		if ( ! $terms ) {
+			return new WP_Error(
+				'terms',
+				__( 'Please accept the terms and conditions.', 'xtra' ),
+				array( 'status' => 400 )
+			);
 		}
 
 		$rows = Xtra_Db::get_rows_by_ids( $lock['ids'] );

@@ -2,7 +2,7 @@
 
 WordPress plugin. Donors sponsor specific weekly hours of a staff position on a monthly Stripe subscription. The public grid never shows who paid — only that the hour is taken. Names stay in the admin sponsors list.
 
-Version 0.1.4. Text domain `xtra`. No DGR language. No Composer. Stripe is called with `wp_remote_post` against the Stripe REST API.
+Version 0.1.6. Text domain `xtra`. No DGR language. No Composer. Stripe is called with `wp_remote_post` against the Stripe REST API.
 
 Live site: https://xtra.cubedigital.com.au
 
@@ -65,7 +65,7 @@ Paste the webhook signing secret (`whsec_…`) on the settings screen.
   - **Show**: Ticks whether that hour is displayed on the public grid.
   - **Paid**: Ticks whether that hour is covered by an outside funding source (e.g. grant-funded), rendering it as sponsored/taken on the public grid.
 - **Granular Cell Locking**: Active live sponsorships lock only their specific hour/cell, allowing admins to freely add new hours or days without freezing the entire schedule.
-- **Sponsors** — Super-user list showing donor name, email, hour cell, status, subscription ID, and monthly amount. Includes options to **Cancel month-end**, **Cancel NOW**, or clear pending slots immediately.
+- **Sponsors** — Super-user list showing donor name, email, hour cell, status, subscription ID, and monthly amount. Includes **Cancel month-end**, **Cancel NOW** (live Stripe subscriptions), and **Clear pending** (ends a pending reservation immediately — same as expiry; no Stripe call).
 
 ## Emails
 
@@ -78,7 +78,7 @@ Hard-coded `wp_mail` in Australian English. No emojis. No “tax deductible”.
 
 ## Uninstall warning
 
-Deleting the plugin **does not cancel live Stripe subscriptions**. Donors will keep being billed until those subscriptions are cancelled in Stripe. Uninstall removes positions, tables (`{prefix}hour_sponsorships`, `{prefix}xtra_payments`), and plugin options only.
+Deleting the plugin **does not cancel live Stripe subscriptions**. Donors will keep being billed until those subscriptions are cancelled in Stripe. Uninstall removes positions, the seeded demo page titled **Perkins High School Chaplaincy** (if present), tables (`{prefix}hour_sponsorships`, `{prefix}xtra_payments`), and plugin options (`xtra_options`, `xtra_db_version`, `xtra_receipt_counter`, and related). It does not cancel Stripe subscriptions.
 
 ## Requirements
 

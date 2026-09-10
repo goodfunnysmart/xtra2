@@ -126,6 +126,9 @@ class Xtra_Admin {
 		if ( isset( $input['terms_url'] ) ) {
 			$out['terms_url'] = esc_url_raw( (string) $input['terms_url'] );
 		}
+		if ( isset( $input['privacy_url'] ) ) {
+			$out['privacy_url'] = esc_url_raw( (string) $input['privacy_url'] );
+		}
 
 		return $out;
 	}
@@ -266,6 +269,14 @@ class Xtra_Admin {
 			esc_attr( Xtra_Plugin::OPTION_KEY ),
 			esc_attr( (string) $opts['terms_url'] )
 		);
+		echo '</td></tr>';
+		echo '<tr><th><label for="xtra_privacy">' . esc_html__( 'Privacy Policy URL', 'xtra' ) . '</label></th><td>';
+		printf(
+			'<input type="url" class="regular-text" id="xtra_privacy" name="%s[privacy_url]" value="%s" />',
+			esc_attr( Xtra_Plugin::OPTION_KEY ),
+			esc_attr( (string) $opts['privacy_url'] )
+		);
+		echo '<p class="description">' . esc_html__( 'Shown as a link on checkout near the terms checkbox (not a separate required tick). If left blank, the WordPress Privacy Policy page is used when one is assigned.', 'xtra' ) . '</p>';
 		echo '</td></tr>';
 		echo '</table>';
 

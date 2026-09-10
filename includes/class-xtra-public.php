@@ -123,6 +123,9 @@ class Xtra_Public {
 				'rateLabel'    => Xtra_Plugin::format_aud( $rate ),
 				'configured'   => $configured,
 				'termsUrl'     => (string) $opts['terms_url'],
+				'privacyUrl'   => ( (string) ( $opts['privacy_url'] ?? '' ) !== '' )
+					? (string) $opts['privacy_url']
+					: (string) get_privacy_policy_url(),
 				'returnUrl'    => esc_url_raw( get_permalink() ? get_permalink() : home_url( '/' ) ),
 				'i18n'         => array(
 					'continue'     => __( 'Continue', 'xtra' ),
@@ -222,6 +225,9 @@ class Xtra_Public {
 				'rateLabel'    => Xtra_Plugin::format_aud( $rate ),
 				'configured'   => $configured,
 				'termsUrl'     => (string) $opts['terms_url'],
+				'privacyUrl'   => ( (string) ( $opts['privacy_url'] ?? '' ) !== '' )
+					? (string) $opts['privacy_url']
+					: (string) get_privacy_policy_url(),
 				'returnUrl'    => esc_url_raw( get_permalink() ? get_permalink() : home_url( '/' ) ),
 				'i18n'         => array(
 					'continue'     => __( 'Continue', 'xtra' ),
@@ -260,6 +266,11 @@ class Xtra_Public {
 		echo ' data-configured="' . ( $configured ? '1' : '0' ) . '"';
 		echo ' data-return-url="' . esc_url( $permalink ? $permalink : home_url( '/' ) ) . '"';
 		echo ' data-terms-url="' . esc_url( (string) $opts['terms_url'] ) . '"';
+		$privacy_attr = (string) ( $opts['privacy_url'] ?? '' );
+		if ( $privacy_attr === '' ) {
+			$privacy_attr = (string) get_privacy_policy_url();
+		}
+		echo ' data-privacy-url="' . esc_url( $privacy_attr ) . '"';
 		echo ' style="background:transparent; border:0; padding:0; box-shadow:none; max-width:none;"';
 		echo '>';
 
@@ -421,7 +432,7 @@ class Xtra_Public {
 		echo '<input type="checkbox" name="opt_in_hour_start" value="1" /> ';
 		echo esc_html__( 'Email me at the start of each hour I sponsor.', 'xtra' );
 		echo '</label></p>';
-				echo '<p class="xtra-terms"><label>';
+		echo '<p class="xtra-terms"><label>';
 		echo '<input type="checkbox" name="terms" value="1" required /> ';
 		$terms_url = (string) $opts['terms_url'];
 		if ( $terms_url !== '' ) {
@@ -443,6 +454,28 @@ class Xtra_Public {
 			echo esc_html__( 'I agree to the terms of this monthly sponsorship. Hours are billed monthly until cancelled at the end of a calendar month.', 'xtra' );
 		}
 		echo '</label></p>';
+		$privacy_url = (string) ( $opts['privacy_url'] ?? '' );
+		if ( $privacy_url === '' ) {
+			$privacy_url = (string) get_privacy_policy_url();
+		}
+		if ( $privacy_url !== '' ) {
+			echo '<p class="xtra-privacy">';
+			printf(
+				/* translators: %s privacy policy URL */
+				wp_kses(
+					__( 'Read our <a href="%s" target="_blank" rel="noopener noreferrer">Privacy Policy</a>.', 'xtra' ),
+					array(
+						'a' => array(
+							'href'   => array(),
+							'target' => array(),
+							'rel'    => array(),
+						),
+					)
+				),
+				esc_url( $privacy_url )
+			);
+			echo '</p>';
+		}
 		echo '<button type="submit" class="xtra-btn xtra-btn-primary">' . esc_html__( 'Pay', 'xtra' ) . '</button>';
 		echo '<p class="xtra-form-error" data-error hidden></p>';
 		echo '</form>';
@@ -485,6 +518,11 @@ class Xtra_Public {
 		echo ' data-configured="' . ( $configured ? '1' : '0' ) . '"';
 		echo ' data-return-url="' . esc_url( $permalink ? $permalink : home_url( '/' ) ) . '"';
 		echo ' data-terms-url="' . esc_url( (string) $opts['terms_url'] ) . '"';
+		$privacy_attr = (string) ( $opts['privacy_url'] ?? '' );
+		if ( $privacy_attr === '' ) {
+			$privacy_attr = (string) get_privacy_policy_url();
+		}
+		echo ' data-privacy-url="' . esc_url( $privacy_attr ) . '"';
 		echo '>';
 
 		if ( $success ) {
@@ -672,7 +710,7 @@ class Xtra_Public {
 		echo '<input type="checkbox" name="opt_in_hour_start" value="1" /> ';
 		echo esc_html__( 'Email me at the start of each hour I sponsor.', 'xtra' );
 		echo '</label></p>';
-				echo '<p class="xtra-terms"><label>';
+		echo '<p class="xtra-terms"><label>';
 		echo '<input type="checkbox" name="terms" value="1" required /> ';
 		$terms_url = (string) $opts['terms_url'];
 		if ( $terms_url !== '' ) {
@@ -694,6 +732,28 @@ class Xtra_Public {
 			echo esc_html__( 'I agree to the terms of this monthly sponsorship. Hours are billed monthly until cancelled at the end of a calendar month.', 'xtra' );
 		}
 		echo '</label></p>';
+		$privacy_url = (string) ( $opts['privacy_url'] ?? '' );
+		if ( $privacy_url === '' ) {
+			$privacy_url = (string) get_privacy_policy_url();
+		}
+		if ( $privacy_url !== '' ) {
+			echo '<p class="xtra-privacy">';
+			printf(
+				/* translators: %s privacy policy URL */
+				wp_kses(
+					__( 'Read our <a href="%s" target="_blank" rel="noopener noreferrer">Privacy Policy</a>.', 'xtra' ),
+					array(
+						'a' => array(
+							'href'   => array(),
+							'target' => array(),
+							'rel'    => array(),
+						),
+					)
+				),
+				esc_url( $privacy_url )
+			);
+			echo '</p>';
+		}
 		echo '<button type="submit" class="xtra-btn xtra-btn-primary">' . esc_html__( 'Pay', 'xtra' ) . '</button>';
 		echo '<p class="xtra-form-error" data-error hidden></p>';
 		echo '</form>';

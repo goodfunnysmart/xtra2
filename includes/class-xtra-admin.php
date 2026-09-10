@@ -22,6 +22,7 @@ class Xtra_Admin {
 		add_action( 'admin_post_xtra_schedule_cancel', array( __CLASS__, 'handle_schedule_cancel' ) );
 		add_action( 'admin_post_xtra_cancel_now', array( __CLASS__, 'handle_cancel_now' ) );
 		add_action( 'admin_post_xtra_clear_pending', array( __CLASS__, 'handle_clear_pending' ) );
+		add_action( 'admin_post_xtra_resend_confirm', array( __CLASS__, 'handle_resend_confirm' ) );
 		add_action( 'admin_notices', array( __CLASS__, 'uninstall_notice' ) );
 		add_filter( 'plugin_action_links_' . plugin_basename( XTRA_FILE ), array( __CLASS__, 'action_links' ) );
 	}
@@ -270,6 +271,32 @@ class Xtra_Admin {
 		submit_button( __( 'Save settings', 'xtra' ) );
 		echo '</form>';
 
+		$last_mail = get_option( 'xtra_last_confirm_mail', null );
+		echo '<h2>' . esc_html__( 'Last confirmation mail attempt', 'xtra' ) . '</h2>';
+		echo '<div class="xtra-last-confirm-mail" style="background:#fff;border:1px solid #c3c4c7;padding:12px 16px;max-width:640px;">';
+		if ( ! is_array( $last_mail ) || empty( $last_mail['time'] ) ) {
+			echo '<p class="description">' . esc_html__( 'No confirmation mail attempt has been recorded yet.', 'xtra' ) . '</p>';
+		} else {
+			$tz   = wp_timezone();
+			$dt   = ( new DateTimeImmutable( '@' . (int) $last_mail['time'] ) )->setTimezone( $tz );
+			$when = $dt->format( get_option( 'date_format' ) . ' ' . get_option( 'time_format' ) );
+			$sid  = isset( $last_mail['session_id'] ) ? (string) $last_mail['session_id'] : '';
+			$prefix = $sid !== '' ? ( strlen( $sid ) > 12 ? substr( $sid, 0, 12 ) . '…' : $sid ) : '—';
+			echo '<table class="form-table" role="presentation" style="margin:0;">';
+			printf( '<tr><th>%s</th><td>%s</td></tr>', esc_html__( 'Time', 'xtra' ), esc_html( $when ) );
+			printf( '<tr><th>%s</th><td>%s</td></tr>', esc_html__( 'Email', 'xtra' ), esc_html( (string) ( $last_mail['email'] ?? '' ) ) );
+			printf( '<tr><th>%s</th><td><code>%s</code></td></tr>', esc_html__( 'Result', 'xtra' ), esc_html( (string) ( $last_mail['result'] ?? '' ) ) );
+			printf( '<tr><th>%s</th><td><code>%s</code></td></tr>', esc_html__( 'Session id', 'xtra' ), esc_html( $prefix ) );
+			if ( ! empty( $last_mail['error'] ) ) {
+				printf( '<tr><th>%s</th><td>%s</td></tr>', esc_html__( 'Error', 'xtra' ), esc_html( (string) $last_mail['error'] ) );
+			}
+			if ( isset( $last_mail['row_count'] ) ) {
+				printf( '<tr><th>%s</th><td>%d</td></tr>', esc_html__( 'Rows', 'xtra' ), (int) $last_mail['row_count'] );
+			}
+			echo '</table>';
+		}
+		echo '</div>';
+
 		echo '<div class="xtra-uninstall-warn notice notice-warning inline"><p><strong>' . esc_html__( 'Uninstall warning.', 'xtra' ) . '</strong> ';
 		echo esc_html__( 'Deleting this plugin does not cancel live Stripe subscriptions. Donors will keep being billed until you cancel those subscriptions in Stripe.', 'xtra' );
 		echo '</p></div>';
@@ -297,6 +324,9 @@ class Xtra_Admin {
 		}
 		if ( isset( $_GET['xtra_notice'] ) && $_GET['xtra_notice'] === 'pending_cleared' ) { // phpcs:ignore WordPress.Security.NonceVerification.Recommended
 			echo '<div class="notice notice-success is-dismissible"><p>' . esc_html__( 'Pending reservation cleared and hours released.', 'xtra' ) . '</p></div>';
+		}
+		if ( isset( $_GET['xtra_notice'] ) && $_GET['xtra_notice'] === 'confirm_resent' ) { // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+			echo '<div class="notice notice-success is-dismissible"><p>' . esc_html__( 'Confirmation email resent.', 'xtra' ) . '</p></div>';
 		}
 		if ( isset( $_GET['xtra_error'] ) ) { // phpcs:ignore WordPress.Security.NonceVerification.Recommended
 			echo '<div class="notice notice-error"><p>' . esc_html( sanitize_text_field( wp_unslash( $_GET['xtra_error'] ) ) ) . '</p></div>';
@@ -398,18 +428,29 @@ class Xtra_Admin {
 			echo '<td><code>' . esc_html( (string) $row->stripe_subscription_id ) . '</code></td>';
 			echo '<td>' . esc_html( Xtra_Plugin::format_aud( (int) $row->amount_cents ) ) . '</td>';
 			echo '<td>';
-			if ( in_array( $row->status, array( 'sponsored', 'cancelling' ), true ) && $row->stripe_subscription_id ) {
-				printf(
-					'<a class="button xtra-cancel-month-btn" href="%s" style="margin-right:5px;">%s</a>',
-					esc_url( $cancel_url ),
-					esc_html__( 'Cancel month-end', 'xtra' )
+			if ( in_array( $row->status, array( 'sponsored', 'cancelling' ), true ) ) {
+				$resend_url = wp_nonce_url(
+					admin_url( 'admin-post.php?action=xtra_resend_confirm&row_id=' . absint( $row->id ) ),
+					'xtra_resend_confirm_' . absint( $row->id )
 				);
 				printf(
-					'<a class="button button-link-delete" href="%s" onclick="return confirm(\'%s\');">%s</a>',
-					esc_url( $cancel_now_url ),
-					esc_attr__( 'Are you sure you want to cancel this subscription immediately and free up the hours?', 'xtra' ),
-					esc_html__( 'Cancel NOW', 'xtra' )
+					'<a class="button" href="%s" style="margin-right:5px;">%s</a>',
+					esc_url( $resend_url ),
+					esc_html__( 'Resend confirmation', 'xtra' )
 				);
+				if ( $row->stripe_subscription_id ) {
+					printf(
+						'<a class="button xtra-cancel-month-btn" href="%s" style="margin-right:5px;">%s</a>',
+						esc_url( $cancel_url ),
+						esc_html__( 'Cancel month-end', 'xtra' )
+					);
+					printf(
+						'<a class="button button-link-delete" href="%s" onclick="return confirm(\'%s\');">%s</a>',
+						esc_url( $cancel_now_url ),
+						esc_attr__( 'Are you sure you want to cancel this subscription immediately and free up the hours?', 'xtra' ),
+						esc_html__( 'Cancel NOW', 'xtra' )
+					);
+				}
 			} elseif ( $row->status === 'pending' && empty( $row->ended_at ) ) {
 				printf(
 					'<a class="button button-link-delete" href="%s" onclick="return confirm(\'%s\');">%s</a>',
@@ -533,6 +574,88 @@ class Xtra_Admin {
 		exit;
 	}
 
+
+
+	/**
+	 * Admin-post: resend payment confirmation email for a sponsored row's session/subscription.
+	 * Bypasses the per-session transient so a missed mail can be forced.
+	 */
+	public static function handle_resend_confirm(): void {
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_die( esc_html__( 'You do not have permission to do that.', 'xtra' ) );
+		}
+
+		$row_id = isset( $_GET['row_id'] ) ? absint( $_GET['row_id'] ) : 0;
+		check_admin_referer( 'xtra_resend_confirm_' . $row_id );
+
+		$redirect = admin_url( 'admin.php?page=xtra-sponsors' );
+
+		if ( $row_id < 1 ) {
+			wp_safe_redirect( add_query_arg( 'xtra_error', rawurlencode( __( 'Missing sponsorship row.', 'xtra' ) ), $redirect ) );
+			exit;
+		}
+
+		$found = Xtra_Db::get_rows_by_ids( array( $row_id ) );
+		if ( empty( $found ) ) {
+			wp_safe_redirect( add_query_arg( 'xtra_error', rawurlencode( __( 'Sponsorship row not found.', 'xtra' ) ), $redirect ) );
+			exit;
+		}
+		$row = $found[0];
+
+		$rows = array();
+		$session_id = isset( $row->stripe_session_id ) ? (string) $row->stripe_session_id : '';
+		$sub_id     = isset( $row->stripe_subscription_id ) ? (string) $row->stripe_subscription_id : '';
+
+		if ( $session_id !== '' ) {
+			$all = Xtra_Db::get_rows_by_stripe_session( $session_id );
+			foreach ( $all as $candidate ) {
+				if ( empty( $candidate->ended_at ) && in_array( $candidate->status, array( 'sponsored', 'cancelling' ), true ) ) {
+					$rows[] = $candidate;
+				}
+			}
+		}
+		if ( empty( $rows ) && $sub_id !== '' ) {
+			$rows = Xtra_Db::get_rows_by_subscription( $sub_id );
+		}
+		if ( empty( $rows ) ) {
+			// Fall back to the single loaded row if it is still live.
+			if ( empty( $row->ended_at ) && in_array( $row->status, array( 'sponsored', 'cancelling' ), true ) ) {
+				$rows = array( $row );
+			}
+		}
+
+		if ( empty( $rows ) ) {
+			wp_safe_redirect( add_query_arg( 'xtra_error', rawurlencode( __( 'No live sponsorship rows to confirm.', 'xtra' ) ), $redirect ) );
+			exit;
+		}
+
+		if ( $session_id !== '' ) {
+			delete_transient( 'xtra_paid_mail_' . $session_id );
+		}
+
+		$sent = Xtra_Mail::payment_confirmed( $rows, '' );
+		$first_email = isset( $rows[0]->donor_email ) ? (string) $rows[0]->donor_email : '';
+		update_option(
+			'xtra_last_confirm_mail',
+			array(
+				'time'       => time(),
+				'session_id' => $session_id,
+				'row_count'  => count( $rows ),
+				'email'      => $first_email,
+				'result'     => $sent ? 'sent' : 'failed',
+				'error'      => $sent ? '' : 'admin resend: wp_mail returned false',
+			),
+			false
+		);
+
+		if ( ! $sent ) {
+			wp_safe_redirect( add_query_arg( 'xtra_error', rawurlencode( __( 'Confirmation email failed to send (wp_mail returned false).', 'xtra' ) ), $redirect ) );
+			exit;
+		}
+
+		wp_safe_redirect( add_query_arg( 'xtra_notice', 'confirm_resent', $redirect ) );
+		exit;
+	}
 
 	/**
 	 * Admin-post: clear a pending reservation immediately (same effect as expiry).

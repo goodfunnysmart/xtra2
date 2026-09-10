@@ -18,6 +18,7 @@ delete_option( 'xtra_fail_counts' );
 delete_option( 'xtra_processed_events' );
 delete_option( 'xtra_db_version' );
 delete_option( 'xtra_receipt_counter' );
+delete_option( 'xtra_last_confirm_mail' );
 
 $plugin_dir = dirname( __FILE__ );
 $db_file    = $plugin_dir . '/includes/class-xtra-db.php';

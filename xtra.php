@@ -3,7 +3,7 @@
  * Plugin Name:       Xtra
  * Plugin URI:        https://xtra.cubedigital.com.au
  * Description:       Donors sponsor specific weekly hours of a staff position on a monthly Stripe subscription. The public grid never shows who paid — only that the hour is taken.
- * Version:           0.1.13
+ * Version:           0.1.14
  * Requires at least: 6.0
  * Requires PHP:      8.0
  * Author:            Cube Digital
@@ -20,7 +20,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define( 'XTRA_VERSION', '0.1.13' );
+define( 'XTRA_VERSION', '0.1.14' );
 define( 'XTRA_FILE', __FILE__ );
 define( 'XTRA_DIR', plugin_dir_path( __FILE__ ) );
 define( 'XTRA_URL', plugin_dir_url( __FILE__ ) );

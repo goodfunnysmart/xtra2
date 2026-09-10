@@ -333,10 +333,13 @@ class Xtra_Stripe {
 	 * @return true|WP_Error
 	 */
 	public static function apply_checkout_completed( array $session ) {
-		$rows = self::rows_for_session( $session );
+		$rows        = self::rows_for_session( $session );
+		$session_id  = isset( $session['id'] ) ? (string) $session['id'] : '';
+		$customer_id = self::object_id( $session['customer'] ?? '' );
+		$sub_id      = self::object_id( $session['subscription'] ?? '' );
+
 		if ( empty( $rows ) ) {
 			// Fallback: update any pending rows for this session_id directly if rows_for_session was empty.
-			$session_id = isset( $session['id'] ) ? (string) $session['id'] : '';
 			if ( $session_id !== '' ) {
 				global $wpdb;
 				$table = Xtra_Db::table();
@@ -367,6 +370,9 @@ class Xtra_Stripe {
 			}
 		}
 		if ( $already ) {
+			$fresh  = Xtra_Db::get_rows_by_ids( $ids );
+			$portal = ( $customer_id !== '' ) ? self::portal_url( $customer_id, home_url( '/' ) ) : '';
+			self::maybe_send_payment_confirmed( $fresh, $portal, $session_id );
 			return true;
 		}
 
@@ -385,10 +391,6 @@ class Xtra_Stripe {
 				}
 			}
 		}
-
-		$customer_id = self::object_id( $session['customer'] ?? '' );
-		$sub_id      = self::object_id( $session['subscription'] ?? '' );
-		$session_id  = isset( $session['id'] ) ? (string) $session['id'] : '';
 
 		// Retrieve customer object from Stripe to get full name and email if missing from session
 		$cust_name  = '';
@@ -458,11 +460,33 @@ class Xtra_Stripe {
 			$updated = Xtra_Db::update_row( (int) $row->id, $update_data );
 		}
 
-		$fresh      = Xtra_Db::get_rows_by_ids( $ids );
-		$return_url = home_url( '/' );
-		$portal     = self::portal_url( $customer_id, $return_url );
-		Xtra_Mail::payment_confirmed( $fresh, $portal );
+		$fresh  = Xtra_Db::get_rows_by_ids( $ids );
+		$portal = ( $customer_id !== '' ) ? self::portal_url( $customer_id, home_url( '/' ) ) : '';
+		self::maybe_send_payment_confirmed( $fresh, $portal, $session_id );
 		return true;
+	}
+
+	/**
+	 * Send payment_confirmed once per Checkout Session (idempotent).
+	 *
+	 * @param array<int, object> $rows       Rows.
+	 * @param string             $portal     Customer portal URL (may be empty).
+	 * @param string             $session_id Checkout Session id.
+	 */
+	private static function maybe_send_payment_confirmed( array $rows, string $portal, string $session_id ): void {
+		if ( empty( $rows ) || $session_id === '' ) {
+			return;
+		}
+		$key = 'xtra_paid_mail_' . $session_id;
+		if ( get_transient( $key ) ) {
+			return;
+		}
+		$sent = Xtra_Mail::payment_confirmed( $rows, $portal );
+		if ( $sent ) {
+			set_transient( $key, 1, 30 * DAY_IN_SECONDS );
+		} else {
+			error_log( 'Xtra: payment_confirmed mail failed for session ' . $session_id );
+		}
 	}
 
 	/**

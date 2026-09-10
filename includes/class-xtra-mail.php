@@ -209,6 +209,45 @@ class Xtra_Mail {
 		self::send( (string) $first->donor_email, $subject, $body );
 	}
 
+
+	/**
+	 * Hour-start notice for a single sponsored cell (opt-in only; caller filters).
+	 *
+	 * @param object $row Sponsorship row.
+	 * @return bool Whether wp_mail reported success.
+	 */
+	public static function hour_start( object $row ): bool {
+		$email = isset( $row->donor_email ) ? (string) $row->donor_email : '';
+		if ( $email === '' || ! is_email( $email ) ) {
+			return false;
+		}
+		$ctx   = self::context_from_row( $row );
+		$dow   = (int) $row->dow;
+		$hour  = (int) $row->hour;
+		$days  = Xtra_Plugin::day_names();
+		$day   = $days[ $dow ] ?? (string) $dow;
+		$when  = $day . ' ' . Xtra_Plugin::hour_label( $hour );
+		$name  = ( isset( $row->donor_name ) && $row->donor_name !== '' )
+			? (string) $row->donor_name
+			: __( 'there', 'xtra' );
+
+		$subject = sprintf(
+			/* translators: 1: role, 2: organisation */
+			__( 'Your sponsored hour is starting — %1$s (%2$s)', 'xtra' ),
+			$ctx['role'],
+			$ctx['org']
+		);
+		$body = sprintf(
+			"Hello %s,\n\nThe %s hour you sponsor at %s is starting now (%s).\n\nThank you for supporting this work.\n\n%s\n",
+			$name,
+			$ctx['role'],
+			$ctx['org'],
+			$when,
+			$ctx['org']
+		);
+		return self::send( $email, $subject, $body );
+	}
+
 	/**
 	 * Email a single payment receipt.
 	 */

@@ -413,7 +413,15 @@ class Xtra_Public {
 		echo '<input type="tel" id="xtra_phone" name="phone" autocomplete="tel" /></p>';
 		echo '<p><label for="xtra_message">' . esc_html__( 'Private message to the organisation (optional)', 'xtra' ) . '</label>';
 		echo '<textarea id="xtra_message" name="message" rows="3"></textarea></p>';
-		echo '<p class="xtra-terms"><label>';
+		echo '<p class="xtra-prefs"><label>';
+		echo '<input type="checkbox" name="opt_in_news" value="1" checked /> ';
+		echo esc_html__( 'Email me updates about this position (newsletter).', 'xtra' );
+		echo '</label></p>';
+		echo '<p class="xtra-prefs"><label>';
+		echo '<input type="checkbox" name="opt_in_hour_start" value="1" /> ';
+		echo esc_html__( 'Email me at the start of each hour I sponsor.', 'xtra' );
+		echo '</label></p>';
+				echo '<p class="xtra-terms"><label>';
 		echo '<input type="checkbox" name="terms" value="1" required /> ';
 		$terms_url = (string) $opts['terms_url'];
 		if ( $terms_url !== '' ) {
@@ -656,7 +664,15 @@ class Xtra_Public {
 		echo '<input type="tel" id="xtra_phone" name="phone" autocomplete="tel" /></p>';
 		echo '<p><label for="xtra_message">' . esc_html__( 'Private message to the organisation (optional)', 'xtra' ) . '</label>';
 		echo '<textarea id="xtra_message" name="message" rows="3"></textarea></p>';
-		echo '<p class="xtra-terms"><label>';
+		echo '<p class="xtra-prefs"><label>';
+		echo '<input type="checkbox" name="opt_in_news" value="1" checked /> ';
+		echo esc_html__( 'Email me updates about this position (newsletter).', 'xtra' );
+		echo '</label></p>';
+		echo '<p class="xtra-prefs"><label>';
+		echo '<input type="checkbox" name="opt_in_hour_start" value="1" /> ';
+		echo esc_html__( 'Email me at the start of each hour I sponsor.', 'xtra' );
+		echo '</label></p>';
+				echo '<p class="xtra-terms"><label>';
 		echo '<input type="checkbox" name="terms" value="1" required /> ';
 		$terms_url = (string) $opts['terms_url'];
 		if ( $terms_url !== '' ) {

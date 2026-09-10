@@ -17,7 +17,6 @@ class Xtra_Mail {
 	 */
 	public static function send( string $to, string $subject, string $body ): bool {
 		if ( $to === '' || ! is_email( $to ) ) {
-			error_log( 'Xtra mail: invalid recipient, send skipped.' );
 			return false;
 		}
 		$opts = Xtra_Plugin::options();
@@ -35,11 +34,7 @@ class Xtra_Mail {
 		$subject = apply_filters( 'xtra_mail_subject', $subject, $to );
 		$body    = apply_filters( 'xtra_mail_body', $body, $to );
 
-		$ok = (bool) wp_mail( $to, $subject, $body, $headers );
-		if ( ! $ok ) {
-			error_log( 'Xtra mail: wp_mail failed.' );
-		}
-		return $ok;
+		return (bool) wp_mail( $to, $subject, $body, $headers );
 	}
 
 	/**
@@ -125,6 +120,7 @@ class Xtra_Mail {
 	 *
 	 * @param array<int, object> $rows        Rows.
 	 * @param string             $portal_url  Customer portal URL.
+	 * @return bool Whether wp_mail reported success.
 	 */
 	public static function payment_confirmed( array $rows, string $portal_url ): bool {
 		if ( empty( $rows ) ) {

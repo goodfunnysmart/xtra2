@@ -22,7 +22,7 @@ class Xtra_Stripe {
 	 * @param array<string, mixed> $body   Form fields.
 	 * @return array<string, mixed>|WP_Error
 	 */
-	public static function request( string $method, string $path, array $body = array() ) {
+	public static function request( string $method, string $path, array $body = array(), int $timeout = 30 ) {
 		$opts = Xtra_Plugin::options();
 		$sk   = (string) $opts['stripe_sk'];
 		if ( $sk === '' ) {
@@ -31,7 +31,7 @@ class Xtra_Stripe {
 
 		$args = array(
 			'method'  => $method,
-			'timeout' => 30,
+			'timeout' => max( 1, $timeout ),
 			'headers' => array(
 				'Authorization' => 'Bearer ' . $sk,
 				'Stripe-Version' => '2024-06-20',
@@ -201,13 +201,15 @@ class Xtra_Stripe {
 		if ( $customer_id === '' ) {
 			return '';
 		}
+		// Short timeout so a slow portal call cannot starve payment_confirmed mail.
 		$session = self::request(
 			'POST',
 			'/billing_portal/sessions',
 			array(
 				'customer'   => $customer_id,
 				'return_url' => $return_url,
-			)
+			),
+			5
 		);
 		if ( is_wp_error( $session ) || empty( $session['url'] ) ) {
 			return '';
@@ -474,7 +476,12 @@ class Xtra_Stripe {
 	 * @param string             $session_id Checkout Session id.
 	 */
 	private static function maybe_send_payment_confirmed( array $rows, string $portal, string $session_id ): void {
-		if ( empty( $rows ) || $session_id === '' ) {
+		if ( empty( $rows ) ) {
+			error_log( 'Xtra: payment_confirmed skipped — empty rows for session ' . $session_id );
+			return;
+		}
+		if ( $session_id === '' ) {
+			error_log( 'Xtra: payment_confirmed skipped — empty session_id' );
 			return;
 		}
 		$key = 'xtra_paid_mail_' . $session_id;

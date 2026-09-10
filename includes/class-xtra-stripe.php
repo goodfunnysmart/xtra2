@@ -184,7 +184,16 @@ class Xtra_Stripe {
 
 		$status         = isset( $session['status'] ) ? (string) $session['status'] : '';
 		$payment_status = isset( $session['payment_status'] ) ? (string) $session['payment_status'] : '';
-		if ( $status !== 'complete' || $payment_status !== 'paid' ) {
+		$sub_id         = self::object_id( $session['subscription'] ?? '' );
+
+		if ( $status !== 'complete' ) {
+			error_log( 'Xtra: confirm_checkout_session skipped — status=' . $status . ' payment_status=' . $payment_status . ' session=' . $session_id );
+			return false;
+		}
+
+		$payment_ok = in_array( $payment_status, array( 'paid', 'no_payment_required' ), true );
+		if ( ! $payment_ok && $sub_id === '' ) {
+			error_log( 'Xtra: confirm_checkout_session skipped — payment_status=' . $payment_status . ' (no subscription) session=' . $session_id );
 			return false;
 		}
 
@@ -491,23 +500,47 @@ class Xtra_Stripe {
 	 * @param string             $session_id Checkout Session id.
 	 */
 	private static function maybe_send_payment_confirmed( array $rows, string $portal, string $session_id ): void {
+		$first_email = '';
+		if ( ! empty( $rows ) && isset( $rows[0]->donor_email ) ) {
+			$first_email = (string) $rows[0]->donor_email;
+		}
+
+		$log = static function ( string $result, string $error = '' ) use ( $session_id, $rows, $first_email ): void {
+			$payload = array(
+				'time'       => time(),
+				'session_id' => $session_id,
+				'row_count'  => count( $rows ),
+				'email'      => $first_email,
+				'result'     => $result,
+			);
+			if ( $error !== '' ) {
+				$payload['error'] = $error;
+			}
+			update_option( 'xtra_last_confirm_mail', $payload, false );
+		};
+
 		if ( empty( $rows ) ) {
 			error_log( 'Xtra: payment_confirmed skipped — empty rows (0) for session ' . $session_id );
+			$log( 'skipped_empty', 'empty rows' );
 			return;
 		}
 		if ( $session_id === '' ) {
 			error_log( 'Xtra: payment_confirmed skipped — empty session_id (rows=' . count( $rows ) . ')' );
+			$log( 'skipped_empty', 'empty session_id' );
 			return;
 		}
 		$key = 'xtra_paid_mail_' . $session_id;
 		if ( get_transient( $key ) ) {
+			$log( 'skipped_transient' );
 			return;
 		}
 		$sent = Xtra_Mail::payment_confirmed( $rows, $portal );
 		if ( $sent ) {
 			set_transient( $key, 1, 30 * DAY_IN_SECONDS );
+			$log( 'sent' );
 		} else {
 			error_log( 'Xtra: payment_confirmed mail failed for session ' . $session_id );
+			$log( 'failed', 'wp_mail returned false' );
 		}
 	}
 

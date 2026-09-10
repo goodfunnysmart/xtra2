@@ -305,6 +305,13 @@ class Xtra_Cpt {
 		);
 		echo '<span class="description"> ' . esc_html__( 'One cell = this amount each month. Two cells = twice this. Never multiplied by 4.33.', 'xtra' ) . '</span></p>';
 
+		echo '<p><label for="xtra_weekly_hour_target"><strong>' . esc_html__( 'Weekly hour target (fundraising goal)', 'xtra' ) . '</strong></label><br />';
+		printf(
+			'<input type="number" min="1" step="1" id="xtra_weekly_hour_target" name="xtra_weekly_hour_target" value="%s" />',
+			esc_attr( (string) $target )
+		);
+		echo '<span class="description"> ' . esc_html__( 'Shown in the admin list as sponsored hours / this target. Does not change the public grid.', 'xtra' ) . '</span></p>';
+
 		echo '<fieldset class="xtra-schedule"><legend><strong>' . esc_html__( 'Schedule Matrix (Hours & Days)', 'xtra' ) . '</strong></legend>';
 		if ( $frozen ) {
 			echo '<p class="xtra-frozen-notice">' . esc_html__( 'Note: Hours that currently have active live sponsorships are locked to protect existing subscriptions. You can freely add new hours or days!', 'xtra' ) . '</p>';
@@ -408,6 +415,12 @@ class Xtra_Cpt {
 			$cents = 1;
 		}
 		update_post_meta( $post_id, self::META_RATE, $cents );
+
+		$target = isset( $_POST['xtra_weekly_hour_target'] ) ? (int) wp_unslash( $_POST['xtra_weekly_hour_target'] ) : 0;
+		if ( $target < 1 ) {
+			$target = 1;
+		}
+		update_post_meta( $post_id, self::META_TARGET, $target );
 
 		$old_meta = self::get_meta( $post_id );
 		$old_schedule = $old_meta['schedule'];

@@ -633,7 +633,16 @@ class Xtra_Admin {
 			delete_transient( 'xtra_paid_mail_' . $session_id );
 		}
 
-		$sent = Xtra_Mail::payment_confirmed( $rows, '' );
+		// Best-effort Billing Portal link (5s timeout). Resend still sends if portal empty.
+		$portal = '';
+		foreach ( $rows as $candidate ) {
+			$cid = isset( $candidate->stripe_customer_id ) ? (string) $candidate->stripe_customer_id : '';
+			if ( $cid !== '' ) {
+				$portal = Xtra_Stripe::portal_url( $cid, home_url( '/' ) );
+				break;
+			}
+		}
+		$sent = Xtra_Mail::payment_confirmed( $rows, $portal );
 		$first_email = isset( $rows[0]->donor_email ) ? (string) $rows[0]->donor_email : '';
 		update_option(
 			'xtra_last_confirm_mail',

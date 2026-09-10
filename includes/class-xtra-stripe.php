@@ -534,6 +534,16 @@ class Xtra_Stripe {
 			$log( 'skipped_transient' );
 			return;
 		}
+		// Best-effort Billing Portal link (5s timeout inside portal_url). Never block mail.
+		if ( $portal === '' ) {
+			foreach ( $rows as $row ) {
+				$cid = isset( $row->stripe_customer_id ) ? (string) $row->stripe_customer_id : '';
+				if ( $cid !== '' ) {
+					$portal = self::portal_url( $cid, home_url( '/' ) );
+					break;
+				}
+			}
+		}
 		$sent = Xtra_Mail::payment_confirmed( $rows, $portal );
 		if ( $sent ) {
 			set_transient( $key, 1, 30 * DAY_IN_SECONDS );

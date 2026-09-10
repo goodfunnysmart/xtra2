@@ -21,6 +21,7 @@ class Xtra_Admin {
 		add_action( 'admin_enqueue_scripts', array( __CLASS__, 'assets' ) );
 		add_action( 'admin_post_xtra_schedule_cancel', array( __CLASS__, 'handle_schedule_cancel' ) );
 		add_action( 'admin_post_xtra_cancel_now', array( __CLASS__, 'handle_cancel_now' ) );
+		add_action( 'admin_post_xtra_clear_pending', array( __CLASS__, 'handle_clear_pending' ) );
 		add_action( 'admin_notices', array( __CLASS__, 'uninstall_notice' ) );
 		add_filter( 'plugin_action_links_' . plugin_basename( XTRA_FILE ), array( __CLASS__, 'action_links' ) );
 	}
@@ -224,7 +225,7 @@ class Xtra_Admin {
 
 		echo '<tr><th>' . esc_html__( 'Webhook URL', 'xtra' ) . '</th><td>';
 		echo '<code>' . esc_html( $webhook ) . '</code>';
-		echo '<p class="description">' . esc_html__( 'In the Stripe Dashboard, send checkout.session.completed, invoice.payment_failed, and customer.subscription.deleted to this URL.', 'xtra' ) . '</p>';
+		echo '<p class="description">' . esc_html__( 'In the Stripe Dashboard, send checkout.session.completed, invoice.paid, invoice.payment_failed, and customer.subscription.deleted to this URL.', 'xtra' ) . '</p>';
 		echo '</td></tr>';
 
 		echo '</table>';
@@ -293,6 +294,9 @@ class Xtra_Admin {
 		}
 		if ( isset( $_GET['xtra_notice'] ) && $_GET['xtra_notice'] === 'now_cancelled' ) { // phpcs:ignore WordPress.Security.NonceVerification.Recommended
 			echo '<div class="notice notice-success is-dismissible"><p>' . esc_html__( 'Subscription cancelled immediately and hours released.', 'xtra' ) . '</p></div>';
+		}
+		if ( isset( $_GET['xtra_notice'] ) && $_GET['xtra_notice'] === 'pending_cleared' ) { // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+			echo '<div class="notice notice-success is-dismissible"><p>' . esc_html__( 'Pending reservation cleared and hours released.', 'xtra' ) . '</p></div>';
 		}
 		if ( isset( $_GET['xtra_error'] ) ) { // phpcs:ignore WordPress.Security.NonceVerification.Recommended
 			echo '<div class="notice notice-error"><p>' . esc_html( sanitize_text_field( wp_unslash( $_GET['xtra_error'] ) ) ) . '</p></div>';
@@ -377,6 +381,10 @@ class Xtra_Admin {
 				admin_url( 'admin-post.php?action=xtra_cancel_now&subscription=' . rawurlencode( (string) $row->stripe_subscription_id ) ),
 				'xtra_cancel_now'
 			);
+			$clear_pending_url = wp_nonce_url(
+				admin_url( 'admin-post.php?action=xtra_clear_pending&row_id=' . absint( $row->id ) ),
+				'xtra_clear_pending_' . absint( $row->id )
+			);
 			echo '<tr>';
 			echo '<td>' . esc_html( $row->donor_name ) . '</td>';
 			echo '<td><a href="mailto:' . esc_attr( $row->donor_email ) . '">' . esc_html( $row->donor_email ) . '</a></td>';
@@ -401,6 +409,13 @@ class Xtra_Admin {
 					esc_url( $cancel_now_url ),
 					esc_attr__( 'Are you sure you want to cancel this subscription immediately and free up the hours?', 'xtra' ),
 					esc_html__( 'Cancel NOW', 'xtra' )
+				);
+			} elseif ( $row->status === 'pending' && empty( $row->ended_at ) ) {
+				printf(
+					'<a class="button button-link-delete" href="%s" onclick="return confirm(\'%s\');">%s</a>',
+					esc_url( $clear_pending_url ),
+					esc_attr__( 'Are you sure you want to clear this pending reservation and free up the hours?', 'xtra' ),
+					esc_html__( 'Clear pending', 'xtra' )
 				);
 			} else {
 				echo '&mdash;';
@@ -515,6 +530,49 @@ class Xtra_Admin {
 		Xtra_Mail::cell_released( $rows );
 
 		wp_safe_redirect( add_query_arg( 'xtra_notice', 'now_cancelled', $redirect ) );
+		exit;
+	}
+
+
+	/**
+	 * Admin-post: clear a pending reservation immediately (same effect as expiry).
+	 * Does not call Stripe — pending rows have no live subscription.
+	 */
+	public static function handle_clear_pending(): void {
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_die( esc_html__( 'You do not have permission to do that.', 'xtra' ) );
+		}
+
+		$row_id = isset( $_GET['row_id'] ) ? absint( $_GET['row_id'] ) : 0;
+		check_admin_referer( 'xtra_clear_pending_' . $row_id );
+
+		$redirect = admin_url( 'admin.php?page=xtra-sponsors' );
+
+		if ( $row_id < 1 ) {
+			wp_safe_redirect( add_query_arg( 'xtra_error', rawurlencode( __( 'Missing pending row.', 'xtra' ) ), $redirect ) );
+			exit;
+		}
+
+		$rows = Xtra_Db::get_rows_by_ids( array( $row_id ) );
+		if ( empty( $rows ) ) {
+			wp_safe_redirect( add_query_arg( 'xtra_error', rawurlencode( __( 'That pending reservation was not found.', 'xtra' ) ), $redirect ) );
+			exit;
+		}
+
+		$row = $rows[0];
+		if ( $row->status !== 'pending' || ! empty( $row->ended_at ) ) {
+			wp_safe_redirect( add_query_arg( 'xtra_error', rawurlencode( __( 'That row is not a live pending reservation.', 'xtra' ) ), $redirect ) );
+			exit;
+		}
+
+		Xtra_Db::update_row(
+			(int) $row->id,
+			array(
+				'ended_at' => Xtra_Plugin::now_mysql(),
+			)
+		);
+
+		wp_safe_redirect( add_query_arg( 'xtra_notice', 'pending_cleared', $redirect ) );
 		exit;
 	}
 

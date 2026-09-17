@@ -799,7 +799,29 @@ class Xtra_Stripe {
 	 * @return true|WP_Error
 	 */
 	private static function on_invoice_paid( array $invoice ) {
-		self::record_invoice_payment( $invoice );
+		$payment_id = self::record_invoice_payment( $invoice );
+		if ( $payment_id < 1 ) {
+			return true;
+		}
+
+		$payment = Xtra_Db::get_payment( $payment_id );
+		if ( ! $payment || (int) $payment->amount_cents < 1 ) {
+			return true;
+		}
+		if ( ! empty( $payment->receipt_sent_at ) ) {
+			return true;
+		}
+
+		$sent = Xtra_Mail::payment_receipt( $payment );
+		if ( $sent ) {
+			Xtra_Db::update_payment(
+				$payment_id,
+				array(
+					'receipt_sent_at' => Xtra_Plugin::now_mysql(),
+				)
+			);
+		}
+
 		return true;
 	}
 

@@ -23,6 +23,7 @@ class Xtra_Admin {
 		add_action( 'admin_post_xtra_cancel_now', array( __CLASS__, 'handle_cancel_now' ) );
 		add_action( 'admin_post_xtra_clear_pending', array( __CLASS__, 'handle_clear_pending' ) );
 		add_action( 'admin_post_xtra_resend_confirm', array( __CLASS__, 'handle_resend_confirm' ) );
+		add_action( 'admin_post_xtra_resend_receipt', array( __CLASS__, 'handle_resend_receipt' ) );
 		add_action( 'admin_notices', array( __CLASS__, 'uninstall_notice' ) );
 		add_filter( 'plugin_action_links_' . plugin_basename( XTRA_FILE ), array( __CLASS__, 'action_links' ) );
 	}
@@ -55,6 +56,14 @@ class Xtra_Admin {
 			'manage_options',
 			'xtra-sponsors',
 			array( __CLASS__, 'render_sponsors' )
+		);
+		add_submenu_page(
+			'xtra',
+			__( 'Payments', 'xtra' ),
+			__( 'Payments', 'xtra' ),
+			'manage_options',
+			'xtra-payments',
+			array( __CLASS__, 'render_payments' )
 		);
 	}
 
@@ -130,6 +139,22 @@ class Xtra_Admin {
 			$out['privacy_url'] = esc_url_raw( (string) $input['privacy_url'] );
 		}
 
+		if ( isset( $input['receipt_logo_id'] ) ) {
+			$out['receipt_logo_id'] = absint( $input['receipt_logo_id'] );
+		}
+		if ( isset( $input['receipt_issuer_name'] ) ) {
+			$out['receipt_issuer_name'] = sanitize_text_field( (string) $input['receipt_issuer_name'] );
+		}
+		if ( isset( $input['receipt_abn'] ) ) {
+			$out['receipt_abn'] = sanitize_text_field( (string) $input['receipt_abn'] );
+		}
+		if ( isset( $input['receipt_address'] ) ) {
+			$out['receipt_address'] = sanitize_textarea_field( (string) $input['receipt_address'] );
+		}
+		if ( isset( $input['receipt_dgr_statement'] ) ) {
+			$out['receipt_dgr_statement'] = sanitize_textarea_field( (string) $input['receipt_dgr_statement'] );
+		}
+
 		return $out;
 	}
 
@@ -165,6 +190,9 @@ class Xtra_Admin {
 			array(),
 			XTRA_VERSION
 		);
+		if ( $screen && $screen->id === 'toplevel_page_xtra' ) {
+			wp_enqueue_media();
+		}
 		wp_enqueue_script(
 			'xtra-admin',
 			XTRA_URL . 'assets/js/xtra-admin.js',
@@ -278,6 +306,63 @@ class Xtra_Admin {
 		);
 		echo '<p class="description">' . esc_html__( 'Shown as a link on checkout near the terms checkbox (not a separate required tick). If left blank, the WordPress Privacy Policy page is used when one is assigned.', 'xtra' ) . '</p>';
 		echo '</td></tr>';
+		echo '</table>';
+
+		echo '<h2>' . esc_html__( 'Donation receipts', 'xtra' ) . '</h2>';
+		echo '<p class="description">' . esc_html__( 'Shown on tax receipt emails sent after each paid invoice. Use free-form receipt text for any DGR or tax wording your organisation needs.', 'xtra' ) . '</p>';
+		echo '<table class="form-table" role="presentation">';
+
+		$logo_id  = absint( $opts['receipt_logo_id'] ?? 0 );
+		$logo_url = $logo_id > 0 ? wp_get_attachment_image_url( $logo_id, 'medium' ) : '';
+		echo '<tr><th>' . esc_html__( 'Organisation logo', 'xtra' ) . '</th><td>';
+		printf(
+			'<input type="hidden" id="xtra_receipt_logo_id" name="%s[receipt_logo_id]" value="%d" />',
+			esc_attr( Xtra_Plugin::OPTION_KEY ),
+			$logo_id
+		);
+		echo '<div id="xtra_receipt_logo_preview" style="margin-bottom:8px;">';
+		if ( $logo_url ) {
+			printf( '<img src="%s" alt="" style="max-width:180px;height:auto;display:block;" />', esc_url( $logo_url ) );
+		}
+		echo '</div>';
+		echo '<button type="button" class="button" id="xtra_receipt_logo_select">' . esc_html__( 'Select logo', 'xtra' ) . '</button> ';
+		echo '<button type="button" class="button" id="xtra_receipt_logo_remove"' . ( $logo_id ? '' : ' style="display:none;"' ) . '>' . esc_html__( 'Remove', 'xtra' ) . '</button>';
+		echo '<p class="description">' . esc_html__( 'Optional. Chosen from the Media Library; shown at the top of HTML tax receipts.', 'xtra' ) . '</p>';
+		echo '</td></tr>';
+
+		echo '<tr><th><label for="xtra_receipt_issuer_name">' . esc_html__( 'Organisation name', 'xtra' ) . '</label></th><td>';
+		printf(
+			'<input type="text" class="regular-text" id="xtra_receipt_issuer_name" name="%s[receipt_issuer_name]" value="%s" />',
+			esc_attr( Xtra_Plugin::OPTION_KEY ),
+			esc_attr( (string) $opts['receipt_issuer_name'] )
+		);
+		echo '</td></tr>';
+
+		echo '<tr><th><label for="xtra_receipt_abn">' . esc_html__( 'ABN', 'xtra' ) . '</label></th><td>';
+		printf(
+			'<input type="text" class="regular-text" id="xtra_receipt_abn" name="%s[receipt_abn]" value="%s" />',
+			esc_attr( Xtra_Plugin::OPTION_KEY ),
+			esc_attr( (string) $opts['receipt_abn'] )
+		);
+		echo '</td></tr>';
+
+		echo '<tr><th><label for="xtra_receipt_address">' . esc_html__( 'Address', 'xtra' ) . '</label></th><td>';
+		printf(
+			'<textarea class="large-text" rows="3" id="xtra_receipt_address" name="%s[receipt_address]">%s</textarea>',
+			esc_attr( Xtra_Plugin::OPTION_KEY ),
+			esc_textarea( (string) $opts['receipt_address'] )
+		);
+		echo '</td></tr>';
+
+		echo '<tr><th><label for="xtra_receipt_dgr">' . esc_html__( 'Receipt text (DGR / tax wording)', 'xtra' ) . '</label></th><td>';
+		printf(
+			'<textarea class="large-text" rows="5" id="xtra_receipt_dgr" name="%s[receipt_dgr_statement]">%s</textarea>',
+			esc_attr( Xtra_Plugin::OPTION_KEY ),
+			esc_textarea( (string) $opts['receipt_dgr_statement'] )
+		);
+		echo '<p class="description">' . esc_html__( 'Free-form text that appears on every receipt email.', 'xtra' ) . '</p>';
+		echo '</td></tr>';
+
 		echo '</table>';
 
 		submit_button( __( 'Save settings', 'xtra' ) );
@@ -502,6 +587,115 @@ class Xtra_Admin {
 		}
 
 		echo '</div>';
+	}
+
+
+	/**
+	 * Payments table — recent invoice payments and resend tax receipt.
+	 */
+	public static function render_payments(): void {
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_die( esc_html__( 'You do not have permission to access this page.', 'xtra' ) );
+		}
+
+		echo '<div class="wrap xtra-payments">';
+		echo '<h1>' . esc_html__( 'Payments', 'xtra' ) . '</h1>';
+		echo '<p>' . esc_html__( 'Recent Stripe invoice payments recorded by Xtra. Tax receipts are emailed automatically after invoice.paid when not already sent.', 'xtra' ) . '</p>';
+
+		if ( isset( $_GET['xtra_notice'] ) && 'receipt_resent' === $_GET['xtra_notice'] ) { // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+			echo '<div class="notice notice-success is-dismissible"><p>' . esc_html__( 'Tax receipt resent.', 'xtra' ) . '</p></div>';
+		}
+		if ( ! empty( $_GET['xtra_error'] ) ) { // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+			echo '<div class="notice notice-error"><p>' . esc_html( sanitize_text_field( wp_unslash( $_GET['xtra_error'] ) ) ) . '</p></div>'; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+		}
+
+		$payments = Xtra_Db::list_payments( 100 );
+		echo '<table class="widefat striped"><thead><tr>';
+		echo '<th>' . esc_html__( 'Paid at', 'xtra' ) . '</th>';
+		echo '<th>' . esc_html__( 'Donor', 'xtra' ) . '</th>';
+		echo '<th>' . esc_html__( 'Amount', 'xtra' ) . '</th>';
+		echo '<th>' . esc_html__( 'Receipt #', 'xtra' ) . '</th>';
+		echo '<th>' . esc_html__( 'Position', 'xtra' ) . '</th>';
+		echo '<th>' . esc_html__( 'Receipt sent', 'xtra' ) . '</th>';
+		echo '<th>' . esc_html__( 'Actions', 'xtra' ) . '</th>';
+		echo '</tr></thead><tbody>';
+
+		if ( empty( $payments ) ) {
+			echo '<tr><td colspan="7">' . esc_html__( 'No payments recorded yet.', 'xtra' ) . '</td></tr>';
+		} else {
+			foreach ( $payments as $payment ) {
+				$paid = mysql2date( get_option( 'date_format' ) . ' ' . get_option( 'time_format' ), (string) $payment->paid_at );
+				$donor = trim( (string) $payment->donor_name );
+				$email = (string) $payment->donor_email;
+				$donor_cell = esc_html( $donor !== '' ? $donor : '—' );
+				if ( $email !== '' ) {
+					$donor_cell .= '<br><a href="mailto:' . esc_attr( $email ) . '">' . esc_html( $email ) . '</a>';
+				}
+				$position = $payment->position_id ? get_the_title( (int) $payment->position_id ) : '—';
+				$receipt  = ! empty( $payment->receipt_number ) ? (string) $payment->receipt_number : '—';
+				$sent_at  = ! empty( $payment->receipt_sent_at )
+					? mysql2date( get_option( 'date_format' ) . ' ' . get_option( 'time_format' ), (string) $payment->receipt_sent_at )
+					: '—';
+
+				$resend = wp_nonce_url(
+					admin_url( 'admin-post.php?action=xtra_resend_receipt&payment_id=' . (int) $payment->id ),
+					'xtra_resend_receipt_' . (int) $payment->id
+				);
+
+				echo '<tr>';
+				echo '<td>' . esc_html( $paid ) . '</td>';
+				echo '<td>' . $donor_cell . '</td>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above
+				echo '<td>' . esc_html( Xtra_Plugin::format_aud( (int) $payment->amount_cents ) ) . '</td>';
+				echo '<td><code>' . esc_html( $receipt ) . '</code></td>';
+				echo '<td>' . esc_html( $position !== '' ? $position : '—' ) . '</td>';
+				echo '<td>' . esc_html( $sent_at ) . '</td>';
+				echo '<td><a class="button button-small" href="' . esc_url( $resend ) . '">' . esc_html__( 'Resend tax receipt', 'xtra' ) . '</a></td>';
+				echo '</tr>';
+			}
+		}
+		echo '</tbody></table>';
+		echo '</div>';
+	}
+
+	/**
+	 * Admin-post: resend a payment tax receipt email.
+	 */
+	public static function handle_resend_receipt(): void {
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_die( esc_html__( 'You do not have permission to do that.', 'xtra' ) );
+		}
+
+		$payment_id = isset( $_GET['payment_id'] ) ? absint( $_GET['payment_id'] ) : 0;
+		check_admin_referer( 'xtra_resend_receipt_' . $payment_id );
+
+		$redirect = admin_url( 'admin.php?page=xtra-payments' );
+
+		if ( $payment_id < 1 ) {
+			wp_safe_redirect( add_query_arg( 'xtra_error', rawurlencode( __( 'Missing payment.', 'xtra' ) ), $redirect ) );
+			exit;
+		}
+
+		$payment = Xtra_Db::get_payment( $payment_id );
+		if ( ! $payment ) {
+			wp_safe_redirect( add_query_arg( 'xtra_error', rawurlencode( __( 'Payment not found.', 'xtra' ) ), $redirect ) );
+			exit;
+		}
+
+		$sent = Xtra_Mail::payment_receipt( $payment );
+		if ( ! $sent ) {
+			wp_safe_redirect( add_query_arg( 'xtra_error', rawurlencode( __( 'Tax receipt failed to send (wp_mail returned false).', 'xtra' ) ), $redirect ) );
+			exit;
+		}
+
+		Xtra_Db::update_payment(
+			$payment_id,
+			array(
+				'receipt_sent_at' => Xtra_Plugin::now_mysql(),
+			)
+		);
+
+		wp_safe_redirect( add_query_arg( 'xtra_notice', 'receipt_resent', $redirect ) );
+		exit;
 	}
 
 	/**

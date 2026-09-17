@@ -63,6 +63,7 @@ final class Xtra_Plugin {
 			'pending_minutes'       => 15,
 			'terms_url'             => '',
 			'privacy_url'           => '',
+			'receipt_logo_id'       => 0,
 			'receipt_issuer_name'   => get_bloginfo( 'name' ),
 			'receipt_abn'           => '',
 			'receipt_address'       => '',

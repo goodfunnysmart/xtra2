@@ -97,6 +97,7 @@ class Xtra_Db {
 			position_id bigint(20) unsigned DEFAULT NULL,
 			hour_labels text,
 			receipt_number varchar(32) DEFAULT NULL,
+			receipt_sent_at datetime DEFAULT NULL,
 			created_at datetime NOT NULL,
 			PRIMARY KEY  (id),
 			UNIQUE KEY stripe_invoice (stripe_invoice_id),
@@ -560,6 +561,44 @@ class Xtra_Db {
 				$id
 			)
 		);
+	}
+
+
+	/**
+	 * Fetch a payment by Stripe invoice id.
+	 *
+	 * @return object|null
+	 */
+	public static function get_payment_by_invoice( string $invoice_id ) {
+		global $wpdb;
+		if ( $invoice_id === '' ) {
+			return null;
+		}
+		$table = self::payments_table();
+		return $wpdb->get_row(
+			$wpdb->prepare(
+				"SELECT * FROM {$table} WHERE stripe_invoice_id = %s",
+				$invoice_id
+			)
+		);
+	}
+
+	/**
+	 * Recent payments ordered by paid_at DESC.
+	 *
+	 * @return array<int, object>
+	 */
+	public static function list_payments( int $limit = 100 ): array {
+		global $wpdb;
+		$limit = max( 1, min( 500, $limit ) );
+		$table = self::payments_table();
+		$rows  = $wpdb->get_results(
+			$wpdb->prepare(
+				"SELECT * FROM {$table} ORDER BY paid_at DESC LIMIT %d",
+				$limit
+			)
+		);
+		return is_array( $rows ) ? $rows : array();
 	}
 
 	/**

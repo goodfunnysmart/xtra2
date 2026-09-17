@@ -102,12 +102,23 @@ class Xtra_Receipts {
 	 * @return array<string, string>
 	 */
 	public static function issuer_details(): array {
-		$opts = Xtra_Plugin::options();
+		$opts    = Xtra_Plugin::options();
+		$logo_id = absint( $opts['receipt_logo_id'] ?? 0 );
+		$logo_url = '';
+		if ( $logo_id > 0 ) {
+			$url = wp_get_attachment_image_url( $logo_id, 'large' );
+			if ( ! $url ) {
+				$url = wp_get_attachment_image_url( $logo_id, 'medium' );
+			}
+			$logo_url = $url ? (string) $url : '';
+		}
 		return array(
-			'name'    => (string) ( $opts['receipt_issuer_name'] ?? '' ),
-			'abn'     => (string) ( $opts['receipt_abn'] ?? '' ),
-			'address' => (string) ( $opts['receipt_address'] ?? '' ),
-			'dgr'     => (string) ( $opts['receipt_dgr_statement'] ?? '' ),
+			'name'     => (string) ( $opts['receipt_issuer_name'] ?? '' ),
+			'abn'      => (string) ( $opts['receipt_abn'] ?? '' ),
+			'address'  => (string) ( $opts['receipt_address'] ?? '' ),
+			'dgr'      => (string) ( $opts['receipt_dgr_statement'] ?? '' ),
+			'logo_id'  => $logo_id,
+			'logo_url' => $logo_url,
 		);
 	}
 
@@ -179,6 +190,74 @@ class Xtra_Receipts {
 		$lines[] = __( 'Thank you for your support.', 'xtra' );
 
 		return implode( "\n", $lines );
+	}
+
+
+	/**
+	 * HTML body for a single payment receipt (email).
+	 *
+	 * @param object $payment Payment row.
+	 */
+	public static function payment_receipt_html( object $payment ): string {
+		$issuer = self::issuer_details();
+		$number = ! empty( $payment->receipt_number )
+			? (string) $payment->receipt_number
+			: Xtra_Db::ensure_receipt_number( (int) $payment->id );
+
+		$paid_date = mysql2date( get_option( 'date_format' ), (string) $payment->paid_at );
+		$hours     = (string) $payment->hour_labels;
+		$position  = $payment->position_id ? get_the_title( (int) $payment->position_id ) : '';
+		$org_name  = $issuer['name'] !== '' ? $issuer['name'] : get_bloginfo( 'name' );
+		$donor     = (string) $payment->donor_name !== '' ? (string) $payment->donor_name : __( 'Donor', 'xtra' );
+		$amount    = Xtra_Plugin::format_aud( (int) $payment->amount_cents );
+
+		$parts = array();
+		$parts[] = '<!DOCTYPE html><html><body style="font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.5;color:#222;max-width:640px;margin:0 auto;padding:24px;">';
+
+		if ( $issuer['logo_url'] !== '' ) {
+			$parts[] = sprintf(
+				'<p style="margin:0 0 16px;"><img src="%s" alt="%s" style="max-width:220px;height:auto;" /></p>',
+				esc_url( $issuer['logo_url'] ),
+				esc_attr( $org_name )
+			);
+		}
+
+		$parts[] = '<p style="margin:0 0 4px;font-size:18px;font-weight:bold;">' . esc_html( $org_name ) . '</p>';
+		if ( $issuer['abn'] !== '' ) {
+			$parts[] = '<p style="margin:0 0 4px;">' . esc_html( sprintf( __( 'ABN: %s', 'xtra' ), $issuer['abn'] ) ) . '</p>';
+		}
+		if ( $issuer['address'] !== '' ) {
+			$parts[] = '<p style="margin:0 0 16px;white-space:pre-line;">' . esc_html( $issuer['address'] ) . '</p>';
+		} else {
+			$parts[] = '<p style="margin:0 0 16px;"></p>';
+		}
+
+		$parts[] = '<h2 style="margin:0 0 12px;font-size:17px;">' . esc_html__( 'Donation receipt', 'xtra' ) . '</h2>';
+		$parts[] = '<p style="margin:0 0 4px;"><strong>' . esc_html__( 'Receipt number:', 'xtra' ) . '</strong> ' . esc_html( $number ) . '</p>';
+		$parts[] = '<p style="margin:0 0 4px;"><strong>' . esc_html__( 'Date of payment:', 'xtra' ) . '</strong> ' . esc_html( $paid_date ) . '</p>';
+		$parts[] = '<p style="margin:0 0 4px;"><strong>' . esc_html__( 'Received from:', 'xtra' ) . '</strong> ' . esc_html( $donor ) . '</p>';
+		$parts[] = '<p style="margin:0 0 16px;"><strong>' . esc_html__( 'Amount received:', 'xtra' ) . '</strong> ' . esc_html( $amount ) . ' AUD</p>';
+
+		if ( $position !== '' || $hours !== '' ) {
+			$parts[] = '<p style="margin:0 0 4px;"><strong>' . esc_html__( 'For:', 'xtra' ) . '</strong></p>';
+			if ( $position !== '' ) {
+				$parts[] = '<p style="margin:0 0 4px;">' . esc_html( sprintf( __( 'sponsorship of %s', 'xtra' ), $position ) ) . '</p>';
+			}
+			if ( $hours !== '' ) {
+				$parts[] = '<p style="margin:0 0 16px;">' . esc_html( $hours ) . '</p>';
+			} else {
+				$parts[] = '<p style="margin:0 0 16px;"></p>';
+			}
+		}
+
+		if ( $issuer['dgr'] !== '' ) {
+			$parts[] = '<p style="margin:0 0 16px;white-space:pre-line;">' . esc_html( $issuer['dgr'] ) . '</p>';
+		}
+
+		$parts[] = '<p style="margin:0 0 8px;">' . esc_html__( 'Thank you for your support.', 'xtra' ) . '</p>';
+		$parts[] = '</body></html>';
+
+		return implode( "\n", $parts );
 	}
 
 	/**

@@ -2,7 +2,7 @@
 
 WordPress plugin. Donors sponsor specific weekly hours of a staff position on a monthly Stripe subscription. The public grid never shows who paid — only that the hour is taken. Names stay in the admin sponsors list.
 
-Version 0.1.14. Text domain `xtra`. No DGR language. No Composer. Stripe is called with `wp_remote_post` against the Stripe REST API.
+Version 0.1.15. Text domain `xtra`. No DGR language. No Composer. Stripe is called with `wp_remote_post` against the Stripe REST API.
 
 Live site: https://xtra.cubedigital.com.au
 
@@ -50,6 +50,8 @@ In the Stripe Dashboard, send these 4 webhook events:
 
 Paste the webhook signing secret (`whsec_…`) on the settings screen.
 
+**Xtra → Settings → Donation receipts** covers organisation logo, name, ABN, address, and free-form receipt text (DGR / tax wording) shown on every tax receipt email.
+
 ## How money works
 
 - One cell = that hour, every week, billed monthly.
@@ -65,6 +67,7 @@ Paste the webhook signing secret (`whsec_…`) on the settings screen.
   - **Show**: Ticks whether that hour is displayed on the public grid.
   - **Paid**: Ticks whether that hour is covered by an outside funding source (e.g. grant-funded), rendering it as sponsored/taken on the public grid.
 - **Granular Cell Locking**: Active live sponsorships lock only their specific hour/cell, allowing admins to freely add new hours or days without freezing the entire schedule.
+- **Payments** — Recent invoice payments with receipt numbers and **Resend tax receipt**.
 - **Sponsors** — Super-user list showing donor name, email, hour cell, status, subscription ID, monthly amount, and email prefs (News / Hour emails). Includes **Resend confirmation**, **Cancel month-end**, **Cancel NOW** (live Stripe subscriptions), and **Clear pending** (ends a pending reservation immediately — same as expiry; no Stripe call).
 
 ## Emails
@@ -76,6 +79,7 @@ Hard-coded `wp_mail` in Australian English. No emojis. No “tax deductible”.
 - Cancel scheduled
 - Hours released
 - Hour-start (opt-in only; first ~10 minutes of the sponsored hour)
+- Donation tax receipt (HTML email after invoice.paid; resend from Xtra → Payments)
 
 Sponsors can opt in to position update / newsletter emails (default on) and hour-start emails (default off) at checkout. Preferences are stored on each sponsorship row.
 

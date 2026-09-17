@@ -34,7 +34,47 @@ class Xtra_Mail {
 		$subject = apply_filters( 'xtra_mail_subject', $subject, $to );
 		$body    = apply_filters( 'xtra_mail_body', $body, $to );
 
-		return (bool) wp_mail( $to, $subject, $body, $headers );
+		$ok = (bool) wp_mail( $to, $subject, $body, $headers );
+		if ( ! $ok ) {
+			// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
+			error_log( 'Xtra_Mail::send failed for ' . $to . ' subject=' . $subject );
+		}
+		return $ok;
+	}
+
+	/**
+	 * Send an HTML email (with plain-text key content already in the HTML).
+	 *
+	 * @param string $to      Recipient.
+	 * @param string $subject Subject.
+	 * @param string $html    HTML body.
+	 * @param string $plain   Optional plain-text fallback (logged / unused by wp_mail when HTML).
+	 */
+	public static function send_html( string $to, string $subject, string $html, string $plain = '' ): bool {
+		if ( $to === '' || ! is_email( $to ) ) {
+			return false;
+		}
+		$opts = Xtra_Plugin::options();
+		$from_name  = sanitize_text_field( (string) $opts['from_name'] );
+		$from_email = sanitize_email( (string) $opts['from_email'] );
+		if ( $from_email === '' ) {
+			$from_email = (string) get_option( 'admin_email' );
+		}
+
+		$headers = array(
+			'Content-Type: text/html; charset=UTF-8',
+			'From: ' . $from_name . ' <' . $from_email . '>',
+		);
+
+		$subject = apply_filters( 'xtra_mail_subject', $subject, $to );
+		$html    = apply_filters( 'xtra_mail_html_body', $html, $to, $plain );
+
+		$ok = (bool) wp_mail( $to, $subject, $html, $headers );
+		if ( ! $ok ) {
+			// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
+			error_log( 'Xtra_Mail::send_html failed for ' . $to . ' subject=' . $subject );
+		}
+		return $ok;
 	}
 
 	/**
@@ -267,10 +307,13 @@ class Xtra_Mail {
 			(string) $payment->receipt_number,
 			$issuer['name'] !== '' ? $issuer['name'] : get_bloginfo( 'name' )
 		);
-		return self::send(
+		$plain = Xtra_Receipts::payment_receipt_body( $payment );
+		$html  = Xtra_Receipts::payment_receipt_html( $payment );
+		return self::send_html(
 			(string) $payment->donor_email,
 			$subject,
-			Xtra_Receipts::payment_receipt_body( $payment )
+			$html,
+			$plain
 		);
 	}
 

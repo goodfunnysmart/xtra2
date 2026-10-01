@@ -48,7 +48,7 @@ class Xtra_Mail {
 	 * @param string $to      Recipient.
 	 * @param string $subject Subject.
 	 * @param string $html    HTML body.
-	 * @param string $plain   Optional plain-text fallback (logged / unused by wp_mail when HTML).
+	 * @param string $plain   Optional plain-text fallback, set as the PHPMailer AltBody (multipart/alternative).
 	 */
 	public static function send_html( string $to, string $subject, string $html, string $plain = '' ): bool {
 		if ( $to === '' || ! is_email( $to ) ) {
@@ -69,7 +69,21 @@ class Xtra_Mail {
 		$subject = apply_filters( 'xtra_mail_subject', $subject, $to );
 		$html    = apply_filters( 'xtra_mail_html_body', $html, $to, $plain );
 
+		$alt_cb = null;
+		if ( $plain !== '' ) {
+			$alt_cb = static function ( $phpmailer ) use ( $plain ) {
+				if ( is_object( $phpmailer ) && property_exists( $phpmailer, 'AltBody' ) ) {
+					$phpmailer->AltBody = $plain;
+				}
+			};
+			add_action( 'phpmailer_init', $alt_cb );
+		}
+
 		$ok = (bool) wp_mail( $to, $subject, $html, $headers );
+
+		if ( null !== $alt_cb ) {
+			remove_action( 'phpmailer_init', $alt_cb );
+		}
 		if ( ! $ok ) {
 			// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
 			error_log( 'Xtra_Mail::send_html failed for ' . $to . ' subject=' . $subject );
@@ -318,28 +332,39 @@ class Xtra_Mail {
 	}
 
 	/**
-	 * Email an annual financial-year donation summary.
+	 * Subject line for an annual FY donation summary.
+	 */
+	public static function annual_summary_subject( string $fy ): string {
+		$issuer = Xtra_Receipts::issuer_details();
+		return sprintf(
+			/* translators: 1: financial year label, 2: issuer name */
+			__( 'Donation summary %1$s — %2$s', 'xtra' ),
+			Xtra_Receipts::financial_year_short_label( $fy ),
+			$issuer['name'] !== '' ? $issuer['name'] : get_bloginfo( 'name' )
+		);
+	}
+
+	/**
+	 * Email an annual financial-year donation summary (HTML, receipt branding, plain-text fallback).
+	 * Assigns receipt numbers to any payment that lacks one before rendering.
 	 *
-	 * @param array<int, object> $payments Payments in the FY.
+	 * @param array<int, object> $payments Successful payments in the FY.
 	 */
 	public static function annual_summary( string $fy, string $donor_name, string $donor_email, array $payments ): bool {
 		if ( $donor_email === '' || ! is_email( $donor_email ) || empty( $payments ) ) {
 			return false;
 		}
+		$fresh = array();
 		foreach ( $payments as $payment ) {
 			Xtra_Db::ensure_receipt_number( (int) $payment->id );
+			$reloaded = Xtra_Db::get_payment( (int) $payment->id );
+			$fresh[]  = $reloaded ? $reloaded : $payment;
 		}
-		$issuer  = Xtra_Receipts::issuer_details();
-		$subject = sprintf(
-			/* translators: 1: financial year, 2: issuer name */
-			__( 'Donation summary %1$s — %2$s', 'xtra' ),
-			$fy,
-			$issuer['name'] !== '' ? $issuer['name'] : get_bloginfo( 'name' )
-		);
-		return self::send(
+		return self::send_html(
 			$donor_email,
-			$subject,
-			Xtra_Receipts::annual_summary_body( $fy, $donor_name, $donor_email, $payments )
+			self::annual_summary_subject( $fy ),
+			Xtra_Receipts::annual_summary_html( $fy, $donor_name, $donor_email, $fresh ),
+			Xtra_Receipts::annual_summary_body( $fy, $donor_name, $donor_email, $fresh )
 		);
 	}
 }

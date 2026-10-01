@@ -24,6 +24,9 @@ class Xtra_Admin {
 		add_action( 'admin_post_xtra_clear_pending', array( __CLASS__, 'handle_clear_pending' ) );
 		add_action( 'admin_post_xtra_resend_confirm', array( __CLASS__, 'handle_resend_confirm' ) );
 		add_action( 'admin_post_xtra_resend_receipt', array( __CLASS__, 'handle_resend_receipt' ) );
+		add_action( 'admin_post_xtra_export_sponsors', array( __CLASS__, 'handle_export_sponsors' ) );
+		add_action( 'admin_post_xtra_export_payments', array( __CLASS__, 'handle_export_payments' ) );
+		add_action( 'admin_post_xtra_donation_summaries', array( __CLASS__, 'handle_donation_summaries' ) );
 		add_action( 'admin_notices', array( __CLASS__, 'uninstall_notice' ) );
 		add_filter( 'plugin_action_links_' . plugin_basename( XTRA_FILE ), array( __CLASS__, 'action_links' ) );
 	}
@@ -64,6 +67,14 @@ class Xtra_Admin {
 			'manage_options',
 			'xtra-payments',
 			array( __CLASS__, 'render_payments' )
+		);
+		add_submenu_page(
+			'xtra',
+			__( 'Donation summaries', 'xtra' ),
+			__( 'Donation summaries', 'xtra' ),
+			'manage_options',
+			'xtra-donation-summaries',
+			array( __CLASS__, 'render_donation_summaries' )
 		);
 	}
 
@@ -449,7 +460,13 @@ class Xtra_Admin {
 		);
 
 		echo '<div class="wrap xtra-sponsors">';
-		echo '<h1>' . esc_html__( 'Sponsors', 'xtra' ) . '</h1>';
+		echo '<h1 class="wp-heading-inline">' . esc_html__( 'Sponsors', 'xtra' ) . '</h1> ';
+		printf(
+			'<a class="page-title-action xtra-export-csv" href="%s">%s</a>',
+			esc_url( wp_nonce_url( admin_url( 'admin-post.php?action=xtra_export_sponsors' ), 'xtra_export_sponsors' ) ),
+			esc_html__( 'Export CSV', 'xtra' )
+		);
+		echo '<hr class="wp-header-end" />';
 		echo '<p>' . esc_html__( 'This list is the super-user group. Names are never shown on the public grid.', 'xtra' ) . '</p>';
 
 		echo '<form method="get" class="xtra-filters">';
@@ -609,6 +626,19 @@ class Xtra_Admin {
 			echo '<div class="notice notice-error"><p>' . esc_html( sanitize_text_field( wp_unslash( $_GET['xtra_error'] ) ) ) . '</p></div>'; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
 		}
 
+		echo '<form method="get" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" class="xtra-export-form" style="margin:12px 0;">';
+		echo '<input type="hidden" name="action" value="xtra_export_payments" />';
+		wp_nonce_field( 'xtra_export_payments', '_wpnonce', false );
+		echo '<label for="xtra_export_fy">' . esc_html__( 'Financial year', 'xtra' ) . '</label> ';
+		echo '<select name="fy" id="xtra_export_fy">';
+		echo '<option value="all">' . esc_html__( 'All', 'xtra' ) . '</option>';
+		foreach ( Xtra_Receipts::data_financial_year_options() as $fy_key => $fy_label ) {
+			printf( '<option value="%s">%s</option>', esc_attr( $fy_key ), esc_html( $fy_label ) );
+		}
+		echo '</select> ';
+		submit_button( __( 'Export CSV', 'xtra' ), 'secondary', '', false );
+		echo '</form>';
+
 		$payments = Xtra_Db::list_payments( 100 );
 		echo '<table class="widefat striped"><thead><tr>';
 		echo '<th>' . esc_html__( 'Paid at', 'xtra' ) . '</th>';
@@ -655,6 +685,605 @@ class Xtra_Admin {
 		}
 		echo '</tbody></table>';
 		echo '</div>';
+	}
+
+	/**
+	 * Max donation summaries sent per click (synchronous; keeps requests well under PHP/host timeouts).
+	 */
+	public const SUMMARY_SEND_CAP = 40;
+
+	/**
+	 * Guard a CSV cell against formula injection: prefix ' when it starts with = + - @ (or tab / CR).
+	 *
+	 * @param mixed $value Cell value.
+	 */
+	public static function csv_safe( $value ): string {
+		$value = (string) $value;
+		if ( $value !== '' && in_array( $value[0], array( '=', '+', '-', '@', "\t", "\r" ), true ) ) {
+			return "'" . $value;
+		}
+		return $value;
+	}
+
+	/**
+	 * Send CSV download headers and the UTF-8 BOM; return the output handle.
+	 *
+	 * @return resource
+	 */
+	private static function csv_start( string $filename ) {
+		if ( function_exists( 'set_time_limit' ) ) {
+			@set_time_limit( 300 ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+		}
+		while ( ob_get_level() > 0 ) {
+			ob_end_clean();
+		}
+		nocache_headers();
+		header( 'Content-Type: text/csv; charset=utf-8' );
+		header( 'Content-Disposition: attachment; filename="' . sanitize_file_name( $filename ) . '"' );
+		header( 'X-Content-Type-Options: nosniff' );
+		$out = fopen( 'php://output', 'w' );
+		fwrite( $out, "\xEF\xBB\xBF" );
+		return $out;
+	}
+
+	/**
+	 * Write one CSV row with injection guarding.
+	 *
+	 * @param resource          $out   Handle.
+	 * @param array<int, mixed> $cells Cells.
+	 */
+	private static function csv_row( $out, array $cells ): void {
+		fputcsv( $out, array_map( array( __CLASS__, 'csv_safe' ), $cells ), ',', '"', '' );
+	}
+
+	/**
+	 * Cents → "45.00" for CSV.
+	 */
+	private static function csv_money( int $cents ): string {
+		return number_format( $cents / 100, 2, '.', '' );
+	}
+
+	/**
+	 * Plain (entity-decoded) post title for CSV / text.
+	 */
+	private static function plain_title( int $post_id ): string {
+		if ( $post_id < 1 ) {
+			return '';
+		}
+		return html_entity_decode( (string) get_the_title( $post_id ), ENT_QUOTES | ENT_HTML5, 'UTF-8' );
+	}
+
+	/**
+	 * FY key ("2026-27") for a MySQL datetime in site time.
+	 */
+	private static function fy_for_mysql( string $mysql ): string {
+		$ts = strtotime( $mysql );
+		if ( ! $ts ) {
+			return '';
+		}
+		$year  = (int) gmdate( 'Y', $ts );
+		$month = (int) gmdate( 'n', $ts );
+		if ( $month < 7 ) {
+			--$year;
+		}
+		return Xtra_Receipts::financial_year_key( $year );
+	}
+
+	/**
+	 * Admin-post: stream every sponsorship row as CSV.
+	 */
+	public static function handle_export_sponsors(): void {
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_die( esc_html__( 'You do not have permission to do that.', 'xtra' ) );
+		}
+		check_admin_referer( 'xtra_export_sponsors' );
+
+		$rows   = Xtra_Db::sponsorships_for_export();
+		$days   = Xtra_Plugin::day_names();
+		$titles = array();
+		$orgs   = array();
+
+		$out = self::csv_start( 'xtra-sponsors-' . wp_date( 'Y-m-d-His' ) . '.csv' );
+		self::csv_row(
+			$out,
+			array( 'id', 'position_id', 'position', 'organisation', 'day', 'hour', 'cell', 'status', 'live', 'sponsor_name', 'email', 'phone', 'address', 'suburb', 'state', 'postcode', 'message', 'amount_aud', 'stripe_customer_id', 'stripe_subscription_id', 'stripe_session_id', 'opt_in_news', 'opt_in_hour_start', 'pending_until', 'created_at', 'cancel_at', 'ended_at' )
+		);
+		foreach ( $rows as $row ) {
+			$pid = (int) $row->position_id;
+			if ( ! isset( $titles[ $pid ] ) ) {
+				$titles[ $pid ] = self::plain_title( $pid );
+				$orgs[ $pid ]   = $pid ? (string) get_post_meta( $pid, Xtra_Cpt::META_ORG, true ) : '';
+			}
+			$dow = (int) $row->dow;
+			self::csv_row(
+				$out,
+				array(
+					(int) $row->id,
+					$pid,
+					$titles[ $pid ],
+					$orgs[ $pid ],
+					$days[ $dow ] ?? (string) $dow,
+					Xtra_Plugin::hour_label( (int) $row->hour ),
+					Xtra_Plugin::cell_label( $dow, (int) $row->hour ),
+					(string) $row->status,
+					empty( $row->ended_at ) ? 'yes' : 'no',
+					(string) $row->donor_name,
+					(string) $row->donor_email,
+					(string) ( $row->donor_phone ?? '' ),
+					(string) ( $row->donor_address ?? '' ),
+					(string) ( $row->donor_suburb ?? '' ),
+					(string) ( $row->donor_state ?? '' ),
+					(string) ( $row->donor_postcode ?? '' ),
+					(string) ( $row->message ?? '' ),
+					self::csv_money( (int) $row->amount_cents ),
+					(string) ( $row->stripe_customer_id ?? '' ),
+					(string) ( $row->stripe_subscription_id ?? '' ),
+					(string) ( $row->stripe_session_id ?? '' ),
+					isset( $row->opt_in_news ) ? (int) $row->opt_in_news : 1,
+					isset( $row->opt_in_hour_start ) ? (int) $row->opt_in_hour_start : 0,
+					(string) ( $row->pending_until ?? '' ),
+					(string) ( $row->created_at ?? '' ),
+					(string) ( $row->cancel_at ?? '' ),
+					(string) ( $row->ended_at ?? '' ),
+				)
+			);
+		}
+		fclose( $out ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+		exit;
+	}
+
+	/**
+	 * Admin-post: stream payments as CSV, optionally for one financial year.
+	 */
+	public static function handle_export_payments(): void {
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_die( esc_html__( 'You do not have permission to do that.', 'xtra' ) );
+		}
+		check_admin_referer( 'xtra_export_payments' );
+
+		$fy     = isset( $_GET['fy'] ) ? sanitize_text_field( wp_unslash( $_GET['fy'] ) ) : 'all';
+		$start  = '';
+		$end    = '';
+		$suffix = 'all';
+		if ( $fy !== '' && $fy !== 'all' ) {
+			$bounds = Xtra_Receipts::financial_year_bounds( $fy );
+			if ( ! $bounds ) {
+				wp_safe_redirect( add_query_arg( 'xtra_error', rawurlencode( __( 'That financial year is not valid.', 'xtra' ) ), admin_url( 'admin.php?page=xtra-payments' ) ) );
+				exit;
+			}
+			$start  = $bounds['start'];
+			$end    = $bounds['end'];
+			$suffix = 'fy' . $fy;
+		}
+
+		$payments = Xtra_Db::payments_for_export( $start, $end );
+		$titles   = array();
+
+		$out = self::csv_start( 'xtra-payments-' . $suffix . '-' . wp_date( 'Y-m-d-His' ) . '.csv' );
+		self::csv_row(
+			$out,
+			array( 'payment_id', 'date', 'financial_year', 'sponsor_name', 'email', 'position', 'hours', 'amount', 'currency', 'stripe_invoice_id', 'receipt_number', 'status', 'receipt_sent_at', 'stripe_customer_id', 'stripe_subscription_id' )
+		);
+		foreach ( $payments as $p ) {
+			$pid = (int) ( $p->position_id ?? 0 );
+			if ( ! isset( $titles[ $pid ] ) ) {
+				$titles[ $pid ] = self::plain_title( $pid );
+			}
+			self::csv_row(
+				$out,
+				array(
+					(int) $p->id,
+					(string) $p->paid_at,
+					Xtra_Receipts::financial_year_short_label( self::fy_for_mysql( (string) $p->paid_at ) ),
+					(string) $p->donor_name,
+					(string) $p->donor_email,
+					$titles[ $pid ],
+					(string) ( $p->hour_labels ?? '' ),
+					self::csv_money( (int) $p->amount_cents ),
+					strtoupper( ! empty( $p->currency ) ? (string) $p->currency : 'aud' ),
+					(string) $p->stripe_invoice_id,
+					(string) ( $p->receipt_number ?? '' ),
+					! empty( $p->status ) ? (string) $p->status : 'paid',
+					(string) ( $p->receipt_sent_at ?? '' ),
+					(string) ( $p->stripe_customer_id ?? '' ),
+					(string) ( $p->stripe_subscription_id ?? '' ),
+				)
+			);
+		}
+		fclose( $out ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+		exit;
+	}
+
+	/**
+	 * Donation summaries page: FY picker, donor table, send / preview / CSV.
+	 */
+	public static function render_donation_summaries(): void {
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_die( esc_html__( 'You do not have permission to access this page.', 'xtra' ) );
+		}
+
+		$options = Xtra_Receipts::data_financial_year_options( true );
+		$current = Xtra_Receipts::current_financial_year();
+		$fy      = isset( $_GET['fy'] ) ? sanitize_text_field( wp_unslash( $_GET['fy'] ) ) : $current; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+		if ( ! isset( $options[ $fy ] ) ) {
+			$fy = $current;
+		}
+		$bounds   = Xtra_Receipts::financial_year_bounds( $fy );
+		$donors   = $bounds ? Xtra_Db::donor_summaries_fy( $bounds['start'], $bounds['end'] ) : array();
+		$last     = Xtra_Db::summary_last_sent_map( $fy );
+		$fy_label = Xtra_Receipts::financial_year_short_label( $fy );
+		$page_url = add_query_arg(
+			array(
+				'page' => 'xtra-donation-summaries',
+				'fy'   => $fy,
+			),
+			admin_url( 'admin.php' )
+		);
+		$dt_fmt = get_option( 'date_format' ) . ' ' . get_option( 'time_format' );
+
+		echo '<div class="wrap xtra-donation-summaries">';
+		echo '<h1>' . esc_html__( 'Donation summaries', 'xtra' ) . '</h1>';
+		echo '<p>' . esc_html(
+			sprintf(
+				/* translators: %s comma-separated status values */
+				__( 'Annual donation summaries per Australian financial year (1 July – 30 June), one per donor email, branded like the tax receipt. Only successful payments are counted (payment status: %s). Re-sending is allowed and every send is logged.', 'xtra' ),
+				implode( ', ', Xtra_Db::success_statuses() )
+			)
+		) . '</p>';
+
+		// Result notice from the last send (one-shot, per user).
+		$result_key = 'xtra_summary_result_' . get_current_user_id();
+		$result     = get_transient( $result_key );
+		if ( is_array( $result ) ) {
+			delete_transient( $result_key );
+			$sent    = (array) ( $result['sent'] ?? array() );
+			$failed  = (array) ( $result['failed'] ?? array() );
+			$skipped = (array) ( $result['skipped'] ?? array() );
+			$capped  = (int) ( $result['capped'] ?? 0 );
+			$class   = empty( $failed ) ? 'notice-success' : ( empty( $sent ) ? 'notice-error' : 'notice-warning' );
+			echo '<div class="notice ' . esc_attr( $class ) . ' is-dismissible"><p><strong>' . esc_html(
+				sprintf(
+					/* translators: 1: FY label, 2: sent count, 3: failed count */
+					__( 'Donation summaries %1$s: %2$d sent, %3$d failed.', 'xtra' ),
+					Xtra_Receipts::financial_year_short_label( (string) ( $result['fy'] ?? $fy ) ),
+					count( $sent ),
+					count( $failed )
+				)
+			) . '</strong></p>';
+			if ( ! empty( $sent ) ) {
+				echo '<p>' . esc_html__( 'Sent to:', 'xtra' ) . ' ' . esc_html( implode( ', ', $sent ) ) . '</p>';
+			}
+			if ( ! empty( $failed ) ) {
+				echo '<p>' . esc_html__( 'Failed (wp_mail returned false):', 'xtra' ) . ' ' . esc_html( implode( ', ', $failed ) ) . '</p>';
+			}
+			if ( ! empty( $skipped ) ) {
+				echo '<p>' . esc_html__( 'Skipped (no successful payments in this financial year):', 'xtra' ) . ' ' . esc_html( implode( ', ', $skipped ) ) . '</p>';
+			}
+			if ( $capped > 0 ) {
+				echo '<p>' . esc_html(
+					sprintf(
+						/* translators: 1: number not sent, 2: cap */
+						__( '%1$d selected donors were not sent because each click sends at most %2$d. Select them again and send.', 'xtra' ),
+						$capped,
+						self::SUMMARY_SEND_CAP
+					)
+				) . '</p>';
+			}
+			echo '</div>';
+		}
+		if ( ! empty( $_GET['xtra_error'] ) ) { // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+			echo '<div class="notice notice-error"><p>' . esc_html( sanitize_text_field( wp_unslash( $_GET['xtra_error'] ) ) ) . '</p></div>'; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+		}
+
+		// FY picker.
+		echo '<form method="get" action="' . esc_url( admin_url( 'admin.php' ) ) . '" class="xtra-fy-filter" style="margin:12px 0;">';
+		echo '<input type="hidden" name="page" value="xtra-donation-summaries" />';
+		echo '<label for="xtra_summary_fy"><strong>' . esc_html__( 'Financial year', 'xtra' ) . '</strong></label> ';
+		echo '<select name="fy" id="xtra_summary_fy" onchange="this.form.submit()">';
+		foreach ( $options as $key => $label ) {
+			printf( '<option value="%s"%s>%s</option>', esc_attr( $key ), selected( $fy, $key, false ), esc_html( $label ) );
+		}
+		echo '</select> ';
+		submit_button( __( 'Show', 'xtra' ), 'secondary', '', false );
+		echo '</form>';
+
+		// Preview (rendered HTML, not sent).
+		$preview_email = isset( $_GET['preview_email'] ) ? strtolower( sanitize_email( wp_unslash( $_GET['preview_email'] ) ) ) : ''; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+		if ( $preview_email !== '' && $bounds ) {
+			$nonce_ok = isset( $_GET['_wpnonce'] ) && wp_verify_nonce( sanitize_text_field( wp_unslash( $_GET['_wpnonce'] ) ), 'xtra_summary_preview' );
+			$p_list   = $nonce_ok ? Xtra_Db::successful_payments_for_donor( $preview_email, $bounds['start'], $bounds['end'] ) : array();
+			echo '<div id="xtra-summary-preview" class="xtra-summary-preview" style="background:#fff;border:1px solid #c3c4c7;padding:12px 16px;margin:16px 0;max-width:780px;">';
+			if ( ! $nonce_ok ) {
+				echo '<p>' . esc_html__( 'Preview link expired. Choose Preview again.', 'xtra' ) . '</p>';
+			} elseif ( empty( $p_list ) ) {
+				echo '<p>' . esc_html__( 'No successful payments for that donor in this financial year.', 'xtra' ) . '</p>';
+			} else {
+				$p_name = '';
+				foreach ( $donors as $d ) {
+					if ( $d['email'] === $preview_email ) {
+						$p_name = $d['name'];
+						break;
+					}
+				}
+				$html  = Xtra_Receipts::annual_summary_html( $fy, $p_name, $preview_email, $p_list );
+				$plain = Xtra_Receipts::annual_summary_body( $fy, $p_name, $preview_email, $p_list );
+				echo '<h2 style="margin-top:0;">' . esc_html(
+					sprintf(
+						/* translators: 1: donor email, 2: FY label */
+						__( 'Preview for %1$s (%2$s) — not sent', 'xtra' ),
+						$preview_email,
+						$fy_label
+					)
+				) . '</h2>';
+				echo '<p><strong>' . esc_html__( 'To:', 'xtra' ) . '</strong> ' . esc_html( $preview_email ) . '<br><strong>' . esc_html__( 'Subject:', 'xtra' ) . '</strong> ' . esc_html( Xtra_Mail::annual_summary_subject( $fy ) ) . '</p>';
+				echo '<iframe title="' . esc_attr__( 'Donation summary preview', 'xtra' ) . '" sandbox="" srcdoc="' . esc_attr( $html ) . '" style="width:100%;height:680px;border:1px solid #dcdcde;background:#fff;"></iframe>';
+				echo '<details style="margin-top:8px;"><summary>' . esc_html__( 'Plain-text version', 'xtra' ) . '</summary><pre style="white-space:pre-wrap;background:#f6f7f7;padding:8px;">' . esc_html( $plain ) . '</pre></details>';
+				echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" style="margin-top:12px;">';
+				echo '<input type="hidden" name="action" value="xtra_donation_summaries" />';
+				echo '<input type="hidden" name="fy" value="' . esc_attr( $fy ) . '" />';
+				echo '<input type="hidden" name="emails[]" value="' . esc_attr( $preview_email ) . '" />';
+				wp_nonce_field( 'xtra_donation_summaries' );
+				printf(
+					'<button type="submit" class="button button-primary" name="xtra_do" value="send" onclick="return confirm(\'%s\');">%s</button> ',
+					esc_attr( sprintf( /* translators: %s email */ __( 'Send this summary to %s now?', 'xtra' ), $preview_email ) ),
+					esc_html__( 'Send to this donor', 'xtra' )
+				);
+				echo '<a class="button" href="' . esc_url( $page_url ) . '">' . esc_html__( 'Close preview', 'xtra' ) . '</a>';
+				echo '</form>';
+			}
+			echo '</div>';
+		}
+
+		// Donor table + bulk actions.
+		echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" id="xtra-summaries-form">';
+		echo '<input type="hidden" name="action" value="xtra_donation_summaries" />';
+		echo '<input type="hidden" name="fy" value="' . esc_attr( $fy ) . '" />';
+		wp_nonce_field( 'xtra_donation_summaries' );
+
+		echo '<div class="tablenav top" style="height:auto;margin:8px 0;">';
+		printf(
+			'<button type="submit" class="button button-primary" name="xtra_do" value="send" onclick="return confirm(\'%s\');">%s</button> ',
+			esc_attr__( 'Send the donation summary email to every ticked donor now?', 'xtra' ),
+			esc_html__( 'Send summary to selected', 'xtra' )
+		);
+		echo '<button type="submit" class="button" name="xtra_do" value="preview">' . esc_html__( 'Preview', 'xtra' ) . '</button> ';
+		echo '<button type="submit" class="button" name="xtra_do" value="csv">' . esc_html__( 'Download summaries CSV', 'xtra' ) . '</button> ';
+		$all_csv = wp_nonce_url( admin_url( 'admin-post.php?action=xtra_donation_summaries&xtra_do=csv&fy=all' ), 'xtra_donation_summaries' );
+		echo '<a href="' . esc_url( $all_csv ) . '" style="margin-left:6px;">' . esc_html__( 'CSV for all years', 'xtra' ) . '</a>';
+		echo '</div>';
+
+		echo '<table class="widefat striped xtra-summaries-table"><thead><tr>';
+		echo '<td class="check-column" style="padding:8px 10px;"><input type="checkbox" id="xtra-summaries-select-all" aria-label="' . esc_attr__( 'Select all', 'xtra' ) . '" /></td>';
+		echo '<th>' . esc_html__( 'Name', 'xtra' ) . '</th>';
+		echo '<th>' . esc_html__( 'Email', 'xtra' ) . '</th>';
+		echo '<th>' . esc_html__( 'Payments', 'xtra' ) . '</th>';
+		echo '<th>' . esc_html( sprintf( /* translators: %s FY label */ __( 'Total paid (%s)', 'xtra' ), $fy_label ) ) . '</th>';
+		echo '<th>' . esc_html__( 'Last summary sent', 'xtra' ) . '</th>';
+		echo '<th>' . esc_html__( 'Actions', 'xtra' ) . '</th>';
+		echo '</tr></thead><tbody>';
+
+		$sum_count = 0;
+		$sum_total = 0;
+		if ( empty( $donors ) ) {
+			echo '<tr><td colspan="7">' . esc_html__( 'No successful payments in this financial year.', 'xtra' ) . '</td></tr>';
+		}
+		$preview_nonce = wp_create_nonce( 'xtra_summary_preview' );
+		foreach ( $donors as $d ) {
+			$sum_count += $d['payment_count'];
+			$sum_total += $d['total_cents'];
+			$sent_cell  = '—';
+			if ( isset( $last[ $d['email'] ] ) ) {
+				$sent_cell = mysql2date( $dt_fmt, $last[ $d['email'] ]['sent_at'] );
+				if ( $last[ $d['email'] ]['count'] > 1 ) {
+					$sent_cell .= ' (' . sprintf( /* translators: %d count */ _n( '%d send', '%d sends', $last[ $d['email'] ]['count'], 'xtra' ), $last[ $d['email'] ]['count'] ) . ')';
+				}
+			}
+			$preview_url = add_query_arg(
+				array(
+					'preview_email' => rawurlencode( $d['email'] ),
+					'_wpnonce'      => $preview_nonce,
+				),
+				$page_url
+			) . '#xtra-summary-preview';
+			echo '<tr>';
+			echo '<th scope="row" class="check-column" style="padding:8px 10px;"><input type="checkbox" class="xtra-summary-cb" name="emails[]" value="' . esc_attr( $d['email'] ) . '" /></th>';
+			echo '<td>' . esc_html( $d['name'] !== '' ? $d['name'] : '—' ) . '</td>';
+			echo '<td><a href="mailto:' . esc_attr( $d['email'] ) . '">' . esc_html( $d['email'] ) . '</a></td>';
+			echo '<td>' . (int) $d['payment_count'] . '</td>';
+			echo '<td>' . esc_html( Xtra_Plugin::format_aud( $d['total_cents'] ) ) . '</td>';
+			echo '<td>' . esc_html( $sent_cell ) . '</td>';
+			echo '<td><a class="button button-small" href="' . esc_url( $preview_url ) . '">' . esc_html__( 'Preview', 'xtra' ) . '</a></td>';
+			echo '</tr>';
+		}
+		echo '</tbody>';
+		if ( ! empty( $donors ) ) {
+			echo '<tfoot><tr><td></td><th>' . esc_html( sprintf( /* translators: %d donors */ _n( '%d donor', '%d donors', count( $donors ), 'xtra' ), count( $donors ) ) ) . '</th><td></td>';
+			echo '<th>' . (int) $sum_count . '</th><th>' . esc_html( Xtra_Plugin::format_aud( $sum_total ) ) . '</th><td></td><td></td></tr></tfoot>';
+		}
+		echo '</table>';
+		echo '<p class="description">' . esc_html(
+			sprintf(
+				/* translators: %d cap */
+				__( 'Sends run immediately, at most %d donors per click so large selections do not time out. Preview uses the first ticked donor. Download summaries CSV covers every donor in the selected financial year.', 'xtra' ),
+				self::SUMMARY_SEND_CAP
+			)
+		) . '</p>';
+		echo '</form>';
+		echo '</div>';
+	}
+
+	/**
+	 * Admin-post: donation summaries (send / preview / CSV).
+	 */
+	public static function handle_donation_summaries(): void {
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_die( esc_html__( 'You do not have permission to do that.', 'xtra' ) );
+		}
+		check_admin_referer( 'xtra_donation_summaries' );
+
+		$do       = isset( $_REQUEST['xtra_do'] ) ? sanitize_key( wp_unslash( $_REQUEST['xtra_do'] ) ) : '';
+		$fy       = isset( $_REQUEST['fy'] ) ? sanitize_text_field( wp_unslash( $_REQUEST['fy'] ) ) : '';
+		$redirect = add_query_arg(
+			array(
+				'page' => 'xtra-donation-summaries',
+				'fy'   => $fy,
+			),
+			admin_url( 'admin.php' )
+		);
+
+		if ( 'csv' === $do ) {
+			self::export_summaries_csv( $fy );
+			exit;
+		}
+
+		if ( ! Xtra_Receipts::is_financial_year( $fy ) ) {
+			wp_safe_redirect( add_query_arg( 'xtra_error', rawurlencode( __( 'That financial year is not valid.', 'xtra' ) ), $redirect ) );
+			exit;
+		}
+
+		$emails = array();
+		if ( isset( $_POST['emails'] ) && is_array( $_POST['emails'] ) ) {
+			foreach ( wp_unslash( $_POST['emails'] ) as $raw ) { // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+				$email = strtolower( sanitize_email( (string) $raw ) );
+				if ( $email !== '' && is_email( $email ) ) {
+					$emails[ $email ] = true;
+				}
+			}
+		}
+		$emails = array_keys( $emails );
+
+		if ( 'preview' === $do ) {
+			if ( empty( $emails ) ) {
+				wp_safe_redirect( add_query_arg( 'xtra_error', rawurlencode( __( 'Tick a donor to preview.', 'xtra' ) ), $redirect ) );
+				exit;
+			}
+			wp_safe_redirect(
+				add_query_arg(
+					array(
+						'preview_email' => rawurlencode( $emails[0] ),
+						'_wpnonce'      => wp_create_nonce( 'xtra_summary_preview' ),
+					),
+					$redirect
+				) . '#xtra-summary-preview'
+			);
+			exit;
+		}
+
+		if ( 'send' !== $do || ! isset( $_SERVER['REQUEST_METHOD'] ) || 'POST' !== $_SERVER['REQUEST_METHOD'] ) {
+			wp_safe_redirect( add_query_arg( 'xtra_error', rawurlencode( __( 'Unknown action.', 'xtra' ) ), $redirect ) );
+			exit;
+		}
+		if ( empty( $emails ) ) {
+			wp_safe_redirect( add_query_arg( 'xtra_error', rawurlencode( __( 'Tick at least one donor to send to.', 'xtra' ) ), $redirect ) );
+			exit;
+		}
+
+		if ( function_exists( 'set_time_limit' ) ) {
+			@set_time_limit( 300 ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+		}
+
+		$bounds = Xtra_Receipts::financial_year_bounds( $fy );
+		$index  = array();
+		foreach ( Xtra_Db::donor_summaries_fy( $bounds['start'], $bounds['end'] ) as $d ) {
+			$index[ $d['email'] ] = $d;
+		}
+
+		$batch   = array_slice( $emails, 0, self::SUMMARY_SEND_CAP );
+		$capped  = count( $emails ) - count( $batch );
+		$sent    = array();
+		$failed  = array();
+		$skipped = array();
+
+		foreach ( $batch as $email ) {
+			$payments = isset( $index[ $email ] ) ? Xtra_Db::successful_payments_for_donor( $email, $bounds['start'], $bounds['end'] ) : array();
+			if ( empty( $payments ) ) {
+				$skipped[] = $email;
+				continue;
+			}
+			$total = 0;
+			foreach ( $payments as $payment ) {
+				$total += (int) $payment->amount_cents;
+			}
+			$ok = Xtra_Mail::annual_summary( $fy, (string) $index[ $email ]['name'], $email, $payments );
+			Xtra_Db::log_summary_send( $email, $fy, $ok, count( $payments ), $total );
+			if ( $ok ) {
+				$sent[] = $email;
+			} else {
+				$failed[] = $email;
+			}
+		}
+
+		set_transient(
+			'xtra_summary_result_' . get_current_user_id(),
+			array(
+				'fy'      => $fy,
+				'sent'    => $sent,
+				'failed'  => $failed,
+				'skipped' => $skipped,
+				'capped'  => $capped,
+			),
+			10 * MINUTE_IN_SECONDS
+		);
+
+		wp_safe_redirect( $redirect );
+		exit;
+	}
+
+	/**
+	 * Stream the summaries CSV: one row per donor per FY (one FY, or "all").
+	 */
+	private static function export_summaries_csv( string $fy ): void {
+		if ( $fy === 'all' ) {
+			$keys = array();
+			foreach ( Xtra_Db::payment_fy_start_years( true ) as $year ) {
+				$keys[] = Xtra_Receipts::financial_year_key( (int) $year );
+			}
+			$last = Xtra_Db::summary_last_sent_map( '' );
+		} else {
+			if ( ! Xtra_Receipts::is_financial_year( $fy ) ) {
+				wp_safe_redirect( add_query_arg( 'xtra_error', rawurlencode( __( 'That financial year is not valid.', 'xtra' ) ), admin_url( 'admin.php?page=xtra-donation-summaries' ) ) );
+				exit;
+			}
+			$keys = array( $fy );
+			$last = array();
+			foreach ( Xtra_Db::summary_last_sent_map( $fy ) as $email => $info ) {
+				$last[ $fy . '|' . $email ] = $info;
+			}
+		}
+
+		$out = self::csv_start( 'xtra-donation-summaries-' . ( $fy === 'all' ? 'all' : 'fy' . $fy ) . '-' . wp_date( 'Y-m-d' ) . '.csv' );
+		self::csv_row(
+			$out,
+			array( 'financial_year', 'fy_start', 'fy_end', 'donor_name', 'email', 'payment_count', 'total_amount', 'currency', 'first_payment', 'last_payment', 'last_summary_sent_at', 'summaries_sent' )
+		);
+		foreach ( $keys as $key ) {
+			$bounds = Xtra_Receipts::financial_year_bounds( $key );
+			if ( ! $bounds ) {
+				continue;
+			}
+			foreach ( Xtra_Db::donor_summaries_fy( $bounds['start'], $bounds['end'] ) as $d ) {
+				$info = $last[ $key . '|' . $d['email'] ] ?? null;
+				self::csv_row(
+					$out,
+					array(
+						Xtra_Receipts::financial_year_short_label( $key ),
+						substr( $bounds['start'], 0, 10 ),
+						substr( $bounds['end'], 0, 10 ),
+						$d['name'],
+						$d['email'],
+						$d['payment_count'],
+						self::csv_money( $d['total_cents'] ),
+						'AUD',
+						$d['first_paid'],
+						$d['last_paid'],
+						$info ? $info['sent_at'] : '',
+						$info ? $info['count'] : 0,
+					)
+				);
+			}
+		}
+		fclose( $out ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+		exit;
 	}
 
 	/**

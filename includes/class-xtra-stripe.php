@@ -702,6 +702,8 @@ class Xtra_Stripe {
 				'paid_at'                => wp_date( 'Y-m-d H:i:s', $paid_at ),
 				'position_id'            => (int) $first->position_id,
 				'hour_labels'            => implode( ', ', $labels ),
+				'status'                 => 'paid',
+				'currency'               => isset( $invoice['currency'] ) ? (string) $invoice['currency'] : 'aud',
 			)
 		);
 	}

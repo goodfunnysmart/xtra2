@@ -98,6 +98,8 @@ class Xtra_Db {
 			hour_labels text,
 			receipt_number varchar(32) DEFAULT NULL,
 			receipt_sent_at datetime DEFAULT NULL,
+			status varchar(20) NOT NULL DEFAULT 'paid',
+			currency varchar(3) NOT NULL DEFAULT 'aud',
 			created_at datetime NOT NULL,
 			PRIMARY KEY  (id),
 			UNIQUE KEY stripe_invoice (stripe_invoice_id),
@@ -110,6 +112,52 @@ class Xtra_Db {
 	}
 
 	/**
+	 * Donation summary send-log table name.
+	 */
+	public static function summary_log_table(): string {
+		global $wpdb;
+		return $wpdb->prefix . 'xtra_summary_log';
+	}
+
+	/**
+	 * Create or upgrade the donation summary send-log table via dbDelta (0.1.16).
+	 * One row per send attempt; re-sending is allowed, so this is a log, not a lock.
+	 */
+	public static function create_summary_log_table(): void {
+		global $wpdb;
+
+		require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+
+		$table           = self::summary_log_table();
+		$charset_collate = $wpdb->get_charset_collate();
+
+		$sql = "CREATE TABLE {$table} (
+			id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+			donor_email varchar(191) NOT NULL DEFAULT '',
+			fy varchar(9) NOT NULL DEFAULT '',
+			result varchar(20) NOT NULL DEFAULT 'sent',
+			payment_count int(11) NOT NULL DEFAULT 0,
+			total_cents int(11) NOT NULL DEFAULT 0,
+			sent_by bigint(20) unsigned NOT NULL DEFAULT 0,
+			sent_at datetime NOT NULL,
+			PRIMARY KEY  (id),
+			KEY email_fy (donor_email, fy),
+			KEY fy (fy)
+		) {$charset_collate};";
+
+		dbDelta( $sql );
+	}
+
+	/**
+	 * Create/upgrade every plugin table.
+	 */
+	public static function create_all_tables(): void {
+		self::create_table();
+		self::create_payments_table();
+		self::create_summary_log_table();
+	}
+
+	/**
 	 * Run schema upgrades when the plugin version changes.
 	 */
 	public static function maybe_upgrade(): void {
@@ -117,8 +165,7 @@ class Xtra_Db {
 		if ( version_compare( $db_version, XTRA_VERSION, '>=' ) ) {
 			return;
 		}
-		self::create_table();
-		self::create_payments_table();
+		self::create_all_tables();
 		update_option( 'xtra_db_version', XTRA_VERSION, false );
 	}
 
@@ -138,6 +185,16 @@ class Xtra_Db {
 	public static function drop_payments_table(): void {
 		global $wpdb;
 		$table = self::payments_table();
+		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- table name is internal.
+		$wpdb->query( "DROP TABLE IF EXISTS {$table}" );
+	}
+
+	/**
+	 * Drop the donation summary log table (uninstall).
+	 */
+	public static function drop_summary_log_table(): void {
+		global $wpdb;
+		$table = self::summary_log_table();
 		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- table name is internal.
 		$wpdb->query( "DROP TABLE IF EXISTS {$table}" );
 	}
@@ -536,13 +593,15 @@ class Xtra_Db {
 			'position_id'            => isset( $data['position_id'] ) ? (int) $data['position_id'] : null,
 			'hour_labels'            => isset( $data['hour_labels'] ) ? (string) $data['hour_labels'] : '',
 			'receipt_number'         => isset( $data['receipt_number'] ) ? (string) $data['receipt_number'] : null,
+			'status'                 => isset( $data['status'] ) && $data['status'] !== '' ? sanitize_key( (string) $data['status'] ) : 'paid',
+			'currency'               => isset( $data['currency'] ) && $data['currency'] !== '' ? strtolower( substr( (string) $data['currency'], 0, 3 ) ) : 'aud',
 			'created_at'             => $now,
 		);
 
 		$ok = $wpdb->insert(
 			$table,
 			$row,
-			array( '%s', '%s', '%s', '%s', '%s', '%d', '%s', '%d', '%s', '%s', '%s' )
+			array( '%s', '%s', '%s', '%s', '%s', '%d', '%s', '%d', '%s', '%s', '%s', '%s', '%s' )
 		);
 		return $ok ? (int) $wpdb->insert_id : 0;
 	}
@@ -864,6 +923,196 @@ class Xtra_Db {
 	}
 
 	/**
+	 * Payment status values that count as a successful (received) payment for
+	 * donation summaries. Rows are only recorded from Stripe invoice.paid with
+	 * amount_paid > 0, stored as status "paid"; "succeeded" is accepted too.
+	 *
+	 * @return array<int, string>
+	 */
+	public static function success_statuses(): array {
+		return (array) apply_filters( 'xtra_success_payment_statuses', array( 'paid', 'succeeded' ) );
+	}
+
+	/**
+	 * SQL fragment "status IN (...)" for successful payments (already prepared).
+	 */
+	private static function success_status_sql(): string {
+		global $wpdb;
+		$statuses = array_values( array_filter( array_map( 'sanitize_key', self::success_statuses() ) ) );
+		if ( empty( $statuses ) ) {
+			$statuses = array( 'paid' );
+		}
+		$in = implode( ',', array_fill( 0, count( $statuses ), '%s' ) );
+		return $wpdb->prepare( "status IN ({$in}) AND amount_cents > 0", ...$statuses ); // phpcs:ignore WordPress.DB.PreparedSQLPlaceholders
+	}
+
+	/**
+	 * Start years of financial years that have payments, newest first.
+	 *
+	 * @param bool $success_only Only count successful payments.
+	 * @return array<int, int>
+	 */
+	public static function payment_fy_start_years( bool $success_only = false ): array {
+		global $wpdb;
+		$table = self::payments_table();
+		$where = $success_only ? 'WHERE ' . self::success_status_sql() : '';
+		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- table name internal, where prepared above.
+		$years = $wpdb->get_col( "SELECT DISTINCT IF(MONTH(paid_at) >= 7, YEAR(paid_at), YEAR(paid_at) - 1) AS fy_start FROM {$table} {$where} ORDER BY fy_start DESC" );
+		if ( ! is_array( $years ) ) {
+			return array();
+		}
+		return array_values( array_filter( array_map( 'intval', $years ) ) );
+	}
+
+	/**
+	 * All payments (optionally limited to a date range), oldest first. For CSV export.
+	 *
+	 * @return array<int, object>
+	 */
+	public static function payments_for_export( string $start = '', string $end = '' ): array {
+		global $wpdb;
+		$table = self::payments_table();
+		if ( $start !== '' && $end !== '' ) {
+			$rows = $wpdb->get_results(
+				$wpdb->prepare(
+					"SELECT * FROM {$table} WHERE paid_at >= %s AND paid_at <= %s ORDER BY paid_at ASC, id ASC",
+					$start,
+					$end
+				)
+			);
+		} else {
+			// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- table name internal.
+			$rows = $wpdb->get_results( "SELECT * FROM {$table} ORDER BY paid_at ASC, id ASC" );
+		}
+		return is_array( $rows ) ? $rows : array();
+	}
+
+	/**
+	 * Every sponsorship row (including ended), oldest first. For CSV export.
+	 *
+	 * @return array<int, object>
+	 */
+	public static function sponsorships_for_export(): array {
+		global $wpdb;
+		$table = self::table();
+		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- table name internal.
+		$rows = $wpdb->get_results( "SELECT * FROM {$table} ORDER BY id ASC" );
+		return is_array( $rows ) ? $rows : array();
+	}
+
+	/**
+	 * Successful payments in a date range grouped by donor email (case-insensitive).
+	 *
+	 * @return array<int, array{email:string, name:string, total_cents:int, payment_count:int, first_paid:string, last_paid:string}>
+	 */
+	public static function donor_summaries_fy( string $fy_start, string $fy_end ): array {
+		global $wpdb;
+		$table   = self::payments_table();
+		$success = self::success_status_sql();
+		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- table name internal, status fragment prepared.
+		$sql  = "SELECT LOWER(TRIM(donor_email)) AS email,
+				SUBSTRING_INDEX(GROUP_CONCAT(donor_name ORDER BY paid_at DESC SEPARATOR '\n'), '\n', 1) AS name,
+				SUM(amount_cents) AS total_cents,
+				COUNT(*) AS payment_count,
+				MIN(paid_at) AS first_paid,
+				MAX(paid_at) AS last_paid
+			FROM {$table}
+			WHERE paid_at >= %s AND paid_at <= %s AND TRIM(donor_email) <> '' AND {$success}
+			GROUP BY LOWER(TRIM(donor_email))
+			ORDER BY name ASC, email ASC";
+		$rows = $wpdb->get_results( $wpdb->prepare( $sql, $fy_start, $fy_end ), ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+		if ( ! is_array( $rows ) ) {
+			return array();
+		}
+		$out = array();
+		foreach ( $rows as $row ) {
+			$out[] = array(
+				'email'         => (string) $row['email'],
+				'name'          => (string) $row['name'],
+				'total_cents'   => (int) $row['total_cents'],
+				'payment_count' => (int) $row['payment_count'],
+				'first_paid'    => (string) $row['first_paid'],
+				'last_paid'     => (string) $row['last_paid'],
+			);
+		}
+		return $out;
+	}
+
+	/**
+	 * Successful payments for one donor email (case-insensitive) in a date range, oldest first.
+	 *
+	 * @return array<int, object>
+	 */
+	public static function successful_payments_for_donor( string $email, string $fy_start, string $fy_end ): array {
+		global $wpdb;
+		$email = strtolower( trim( $email ) );
+		if ( $email === '' ) {
+			return array();
+		}
+		$table   = self::payments_table();
+		$success = self::success_status_sql();
+		$sql     = "SELECT * FROM {$table}
+			WHERE LOWER(TRIM(donor_email)) = %s AND paid_at >= %s AND paid_at <= %s AND {$success}
+			ORDER BY paid_at ASC, id ASC";
+		$rows = $wpdb->get_results( $wpdb->prepare( $sql, $email, $fy_start, $fy_end ) ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+		return is_array( $rows ) ? $rows : array();
+	}
+
+	/**
+	 * Record a donation summary send attempt.
+	 */
+	public static function log_summary_send( string $email, string $fy, bool $sent, int $payment_count, int $total_cents ): void {
+		global $wpdb;
+		$wpdb->insert(
+			self::summary_log_table(),
+			array(
+				'donor_email'   => strtolower( trim( $email ) ),
+				'fy'            => $fy,
+				'result'        => $sent ? 'sent' : 'failed',
+				'payment_count' => $payment_count,
+				'total_cents'   => $total_cents,
+				'sent_by'       => get_current_user_id(),
+				'sent_at'       => Xtra_Plugin::now_mysql(),
+			),
+			array( '%s', '%s', '%s', '%d', '%d', '%d', '%s' )
+		);
+	}
+
+	/**
+	 * Last successful summary send per donor email for a financial year.
+	 *
+	 * @param string $fy FY key, or '' for every FY (keys become "fy|email").
+	 * @return array<string, array{sent_at:string, count:int}>
+	 */
+	public static function summary_last_sent_map( string $fy = '' ): array {
+		global $wpdb;
+		$table = self::summary_log_table();
+		if ( $fy !== '' ) {
+			$rows = $wpdb->get_results(
+				$wpdb->prepare(
+					"SELECT donor_email, fy, MAX(sent_at) AS last_sent, COUNT(*) AS sends FROM {$table} WHERE fy = %s AND result = 'sent' GROUP BY donor_email, fy",
+					$fy
+				),
+				ARRAY_A
+			);
+		} else {
+			// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- table name internal.
+			$rows = $wpdb->get_results( "SELECT donor_email, fy, MAX(sent_at) AS last_sent, COUNT(*) AS sends FROM {$table} WHERE result = 'sent' GROUP BY donor_email, fy", ARRAY_A );
+		}
+		$map = array();
+		if ( is_array( $rows ) ) {
+			foreach ( $rows as $row ) {
+				$key         = $fy !== '' ? (string) $row['donor_email'] : $row['fy'] . '|' . $row['donor_email'];
+				$map[ $key ] = array(
+					'sent_at' => (string) $row['last_sent'],
+					'count'   => (int) $row['sends'],
+				);
+			}
+		}
+		return $map;
+	}
+
+	/**
 	 * Live sponsored rows opted in to hour-start emails for a given cell.
 	 *
 	 * @return array<int, object>
@@ -893,7 +1142,7 @@ add_action( 'admin_init', function() {
 	$xtra_version = defined( 'XTRA_VERSION' ) ? XTRA_VERSION : 'unknown';
 
 	if ( $current_db_version !== $xtra_version ) {
-		Xtra_Db::create_table();
+		Xtra_Db::create_all_tables();
 		update_option( 'xtra_db_version', $xtra_version, false );
 	}
 });

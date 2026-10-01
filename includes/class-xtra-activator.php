@@ -17,8 +17,7 @@ class Xtra_Activator {
 	 */
 	public static function activate(): void {
 		Xtra_Cpt::register();
-		Xtra_Db::create_table();
-		Xtra_Db::create_payments_table();
+		Xtra_Db::create_all_tables();
 
 		if ( false === get_option( Xtra_Plugin::OPTION_KEY, false ) ) {
 			add_option( Xtra_Plugin::OPTION_KEY, Xtra_Plugin::defaults() );

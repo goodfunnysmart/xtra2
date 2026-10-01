@@ -2,7 +2,7 @@
 /**
  * Uninstall Xtra.
  *
- * Deletes CPT posts and meta, drops sponsorship and payments tables, removes options,
+ * Deletes CPT posts and meta, drops sponsorship, payments and summary-log tables, removes options,
  * and deletes the seeded demo page if present.
  * Does NOT cancel live Stripe subscriptions. Those keep billing until cancelled in Stripe.
  *
@@ -27,6 +27,7 @@ if ( file_exists( $db_file ) ) {
 	if ( class_exists( 'Xtra_Db' ) ) {
 		Xtra_Db::drop_table();
 		Xtra_Db::drop_payments_table();
+		Xtra_Db::drop_summary_log_table();
 	}
 } else {
 	$table = $wpdb->prefix . 'hour_sponsorships';
@@ -36,6 +37,10 @@ if ( file_exists( $db_file ) ) {
 	$payments = $wpdb->prefix . 'xtra_payments';
 	// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- table name is constructed from the prefix only.
 	$wpdb->query( "DROP TABLE IF EXISTS {$payments}" );
+
+	$summary_log = $wpdb->prefix . 'xtra_summary_log';
+	// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- table name is constructed from the prefix only.
+	$wpdb->query( "DROP TABLE IF EXISTS {$summary_log}" );
 }
 
 $ids = get_posts(

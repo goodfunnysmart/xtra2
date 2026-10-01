@@ -1,5 +1,36 @@
 (function () {
 	'use strict';
+	// Donation summaries: select-all checkbox.
+	var all = document.getElementById('xtra-summaries-select-all');
+	if (!all) {
+		return;
+	}
+	var boxes = function () {
+		return document.querySelectorAll('.xtra-summary-cb');
+	};
+	all.addEventListener('change', function () {
+		boxes().forEach(function (cb) {
+			cb.checked = all.checked;
+		});
+	});
+	document.addEventListener('change', function (ev) {
+		if (!ev.target.classList || !ev.target.classList.contains('xtra-summary-cb')) {
+			return;
+		}
+		var list = boxes();
+		var checked = 0;
+		list.forEach(function (cb) {
+			if (cb.checked) {
+				checked++;
+			}
+		});
+		all.checked = list.length > 0 && checked === list.length;
+		all.indeterminate = checked > 0 && checked < list.length;
+	});
+})();
+
+(function () {
+	'use strict';
 	document.addEventListener('click', function (ev) {
 		var t = ev.target.closest('a[href*="action=xtra_schedule_cancel"]');
 		if (!t) {

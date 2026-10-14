@@ -2,7 +2,7 @@
 
 WordPress plugin. Donors sponsor specific weekly hours of a staff position on a monthly Stripe subscription. The public grid never shows who paid — only that the hour is taken. Names stay in the admin sponsors list.
 
-Version 0.1.16. Text domain `xtra`. No DGR language. No Composer. Stripe is called with `wp_remote_post` against the Stripe REST API.
+Version 0.1.17. Text domain `xtra`. No DGR language. No Composer. Stripe is called with `wp_remote_post` against the Stripe REST API.
 
 Live site: https://xtra.cubedigital.com.au
 
@@ -92,6 +92,7 @@ Hour-start emails need WP-Cron (or a real system cron hitting `wp-cron.php`) rou
 
 ## Changelog
 
+- **0.1.17** — New Settings field **Customer portal login link** (Stripe Dashboard → Settings → Billing → Customer portal → Activate login link; test and live links differ). Every sponsor email (confirmation, tax receipt, donation summary, hour-start, cancel scheduled, hours released) now carries a non-expiring **Manage your sponsorship** link ("Enter your email at the link to update your card or cancel."). New helper `Xtra_Stripe::manage_url()` returns the setting, falling back to a short-lived Billing Portal session (5s timeout, non-blocking) when blank.
 - **0.1.16** — Export CSV on Sponsors and Payments (FY filter). New **Donation summaries** submenu: per-FY donor table, preview, send (HTML in receipt branding, plain-text alternative, 40 per click), summaries CSV, send log table `{prefix}xtra_summary_log`. Payments table gains `status` (default `paid`) and `currency` (default `aud`) columns. HTML emails now carry a plain-text alternative part. DB version follows the plugin version (dbDelta on upgrade).
 - **0.1.15** — Donation receipts (HTML email, settings, Payments admin).
 

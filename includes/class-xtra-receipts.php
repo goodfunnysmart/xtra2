@@ -204,7 +204,7 @@ class Xtra_Receipts {
 	 *
 	 * @param object $payment Payment row.
 	 */
-	public static function payment_receipt_body( object $payment ): string {
+	public static function payment_receipt_body( object $payment, string $manage_url = '' ): string {
 		$issuer = self::issuer_details();
 		$number = ! empty( $payment->receipt_number )
 			? (string) $payment->receipt_number
@@ -265,6 +265,11 @@ class Xtra_Receipts {
 			$lines[] = '';
 		}
 		$lines[] = __( 'Thank you for your support.', 'xtra' );
+		$manage  = Xtra_Mail::manage_block_text( $manage_url );
+		if ( $manage !== '' ) {
+			$lines[] = '';
+			$lines[] = rtrim( $manage );
+		}
 
 		return implode( "\n", $lines );
 	}
@@ -275,7 +280,7 @@ class Xtra_Receipts {
 	 *
 	 * @param object $payment Payment row.
 	 */
-	public static function payment_receipt_html( object $payment ): string {
+	public static function payment_receipt_html( object $payment, string $manage_url = '' ): string {
 		$issuer = self::issuer_details();
 		$number = ! empty( $payment->receipt_number )
 			? (string) $payment->receipt_number
@@ -315,7 +320,8 @@ class Xtra_Receipts {
 			$parts[] = '<p style="margin:0 0 16px;white-space:pre-line;">' . esc_html( $issuer['dgr'] ) . '</p>';
 		}
 
-		$parts[] = '<p style="margin:0 0 8px;">' . esc_html__( 'Thank you for your support.', 'xtra' ) . '</p>';
+		$parts[] = '<p style="margin:0 0 16px;">' . esc_html__( 'Thank you for your support.', 'xtra' ) . '</p>';
+		$parts[] = Xtra_Mail::manage_block_html( $manage_url );
 		$parts[] = '</body></html>';
 
 		return implode( "\n", $parts );
@@ -326,7 +332,7 @@ class Xtra_Receipts {
 	 *
 	 * @param array<int, object> $payments Payments in the FY.
 	 */
-	public static function annual_summary_body( string $fy, string $donor_name, string $donor_email, array $payments ): string {
+	public static function annual_summary_body( string $fy, string $donor_name, string $donor_email, array $payments, string $manage_url = '' ): string {
 		$issuer = self::issuer_details();
 		$total  = 0;
 		$lines  = array();
@@ -382,6 +388,11 @@ class Xtra_Receipts {
 			$lines[] = '';
 		}
 		$lines[] = __( 'Please retain this summary for your records.', 'xtra' );
+		$manage  = Xtra_Mail::manage_block_text( $manage_url );
+		if ( $manage !== '' ) {
+			$lines[] = '';
+			$lines[] = rtrim( $manage );
+		}
 
 		return implode( "\n", $lines );
 	}
@@ -404,7 +415,7 @@ class Xtra_Receipts {
 	 *
 	 * @param array<int, object> $payments Successful payments in the FY, oldest first.
 	 */
-	public static function annual_summary_html( string $fy, string $donor_name, string $donor_email, array $payments ): string {
+	public static function annual_summary_html( string $fy, string $donor_name, string $donor_email, array $payments, string $manage_url = '' ): string {
 		$issuer   = self::issuer_details();
 		$org_name = $issuer['name'] !== '' ? $issuer['name'] : get_bloginfo( 'name' );
 		$donor    = $donor_name !== '' ? $donor_name : $donor_email;
@@ -465,6 +476,7 @@ class Xtra_Receipts {
 		}
 
 		$parts[] = '<p style="margin:0 0 8px;">' . esc_html__( 'Thank you for your support. Please retain this summary for your records.', 'xtra' ) . '</p>';
+		$parts[] = Xtra_Mail::manage_block_html( $manage_url );
 		$parts[] = '<p style="margin:0 0 8px;color:#666;font-size:13px;">' . esc_html( $org_name ) . '</p>';
 		$parts[] = '</body></html>';
 

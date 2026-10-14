@@ -143,6 +143,9 @@ class Xtra_Admin {
 			}
 			$out['pending_minutes'] = $mins;
 		}
+		if ( isset( $input['portal_login_url'] ) ) {
+			$out['portal_login_url'] = esc_url_raw( trim( (string) $input['portal_login_url'] ) );
+		}
 		if ( isset( $input['terms_url'] ) ) {
 			$out['terms_url'] = esc_url_raw( (string) $input['terms_url'] );
 		}
@@ -301,6 +304,15 @@ class Xtra_Admin {
 		);
 		echo '<p class="description">' . esc_html__( 'Default 15. Abandoned checkouts release hours after this window. Stripe Checkout sessions cannot expire sooner than 30 minutes; if payment lands after expiry and the cell was retaken, the webhook will not double-book.', 'xtra' ) . '</p>';
 		echo '<p class="description">' . esc_html__( 'Hour-start emails (for sponsors who opt in) need WP-Cron, or a real system cron hitting wp-cron.php, roughly every 5 minutes. The plugin registers a 5-minute schedule for that.', 'xtra' ) . '</p>';
+		echo '</td></tr>';
+		echo '<tr><th><label for="xtra_portal_login">' . esc_html__( 'Customer portal login link', 'xtra' ) . '</label></th><td>';
+		printf(
+			'<input type="url" class="regular-text" id="xtra_portal_login" name="%s[portal_login_url]" value="%s" placeholder="https://billing.stripe.com/p/login/..." />',
+			esc_attr( Xtra_Plugin::OPTION_KEY ),
+			esc_attr( (string) ( $opts['portal_login_url'] ?? '' ) )
+		);
+		echo '<p class="description">' . esc_html__( 'Stripe Dashboard → Settings → Billing → Customer portal → Activate login link; paste the link here (test and live have different links).', 'xtra' ) . '</p>';
+		echo '<p class="description">' . esc_html__( 'Used for the "Manage your sponsorship" link in every sponsor email. If blank, emails fall back to a short-lived Billing Portal session link.', 'xtra' ) . '</p>';
 		echo '</td></tr>';
 		echo '<tr><th><label for="xtra_terms">' . esc_html__( 'Terms URL', 'xtra' ) . '</label></th><td>';
 		printf(
@@ -1005,8 +1017,8 @@ class Xtra_Admin {
 						break;
 					}
 				}
-				$html  = Xtra_Receipts::annual_summary_html( $fy, $p_name, $preview_email, $p_list );
-				$plain = Xtra_Receipts::annual_summary_body( $fy, $p_name, $preview_email, $p_list );
+				$html  = Xtra_Receipts::annual_summary_html( $fy, $p_name, $preview_email, $p_list, Xtra_Stripe::manage_url() );
+				$plain = Xtra_Receipts::annual_summary_body( $fy, $p_name, $preview_email, $p_list, Xtra_Stripe::manage_url() );
 				echo '<h2 style="margin-top:0;">' . esc_html(
 					sprintf(
 						/* translators: 1: donor email, 2: FY label */
@@ -1474,15 +1486,15 @@ class Xtra_Admin {
 			delete_transient( 'xtra_paid_mail_' . $session_id );
 		}
 
-		// Best-effort Billing Portal link (5s timeout). Resend still sends if portal empty.
-		$portal = '';
+		// Manage link: portal login link from Settings, else best-effort session (5s). Resend still sends if empty.
+		$cid = '';
 		foreach ( $rows as $candidate ) {
 			$cid = isset( $candidate->stripe_customer_id ) ? (string) $candidate->stripe_customer_id : '';
 			if ( $cid !== '' ) {
-				$portal = Xtra_Stripe::portal_url( $cid, home_url( '/' ) );
 				break;
 			}
 		}
+		$portal = Xtra_Stripe::manage_url( $cid );
 		$sent = Xtra_Mail::payment_confirmed( $rows, $portal );
 		$first_email = isset( $rows[0]->donor_email ) ? (string) $rows[0]->donor_email : '';
 		update_option(

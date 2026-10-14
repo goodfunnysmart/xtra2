@@ -208,6 +208,28 @@ class Xtra_Stripe {
 	}
 
 	/**
+	 * Non-expiring "Manage your sponsorship" link for emails.
+	 *
+	 * Returns the Stripe customer portal login link from Settings when set.
+	 * Otherwise falls back to a short-lived Billing Portal session for the
+	 * customer (5s timeout, empty on failure so mail is never blocked).
+	 *
+	 * @param string $customer_id Stripe customer id (fallback only).
+	 * @return string URL or empty.
+	 */
+	public static function manage_url( string $customer_id = '' ): string {
+		$opts  = Xtra_Plugin::options();
+		$login = isset( $opts['portal_login_url'] ) ? trim( (string) $opts['portal_login_url'] ) : '';
+		if ( $login !== '' ) {
+			return $login;
+		}
+		if ( $customer_id === '' ) {
+			return '';
+		}
+		return self::portal_url( $customer_id, home_url( '/' ) );
+	}
+
+	/**
 	 * Billing portal session for a customer.
 	 *
 	 * @return string URL or empty.
@@ -540,15 +562,16 @@ class Xtra_Stripe {
 			$log( 'skipped_transient' );
 			return;
 		}
-		// Best-effort Billing Portal link (5s timeout inside portal_url). Never block mail.
+		// Manage link: permanent portal login link from Settings, else best-effort session (5s). Never block mail.
 		if ( $portal === '' ) {
+			$cid = '';
 			foreach ( $rows as $row ) {
 				$cid = isset( $row->stripe_customer_id ) ? (string) $row->stripe_customer_id : '';
 				if ( $cid !== '' ) {
-					$portal = self::portal_url( $cid, home_url( '/' ) );
 					break;
 				}
 			}
+			$portal = self::manage_url( $cid );
 		}
 		$sent = Xtra_Mail::payment_confirmed( $rows, $portal );
 		if ( $sent ) {

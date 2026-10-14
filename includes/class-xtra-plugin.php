@@ -62,6 +62,7 @@ final class Xtra_Plugin {
 			'from_email'            => (string) get_option( 'admin_email' ),
 			'pending_minutes'       => 15,
 			'terms_url'             => '',
+			'portal_login_url'      => '',
 			'privacy_url'           => '',
 			'receipt_logo_id'       => 0,
 			'receipt_issuer_name'   => get_bloginfo( 'name' ),

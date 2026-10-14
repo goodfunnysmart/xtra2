@@ -140,6 +140,47 @@ class Xtra_Mail {
 	}
 
 	/**
+	 * Stripe customer id from the first row/payment that has one.
+	 *
+	 * @param array<int, object> $rows Rows or payments.
+	 */
+	public static function customer_id_from( array $rows ): string {
+		foreach ( $rows as $row ) {
+			$cid = isset( $row->stripe_customer_id ) ? (string) $row->stripe_customer_id : '';
+			if ( $cid !== '' ) {
+				return $cid;
+			}
+		}
+		return '';
+	}
+
+	/**
+	 * Plain-text "Manage your sponsorship" block (empty when no URL).
+	 */
+	public static function manage_block_text( string $url ): string {
+		if ( $url === '' ) {
+			return '';
+		}
+		return sprintf(
+			"%s:\n%s\n%s\n\n",
+			__( 'Manage your sponsorship', 'xtra' ),
+			$url,
+			__( 'Enter your email at the link to update your card or cancel.', 'xtra' )
+		);
+	}
+
+	/**
+	 * HTML "Manage your sponsorship" block (empty when no URL).
+	 */
+	public static function manage_block_html( string $url ): string {
+		if ( $url === '' ) {
+			return '';
+		}
+		return '<p style="margin:0 0 4px;"><a href="' . esc_url( $url ) . '" style="color:#0b57d0;font-weight:bold;">' . esc_html__( 'Manage your sponsorship', 'xtra' ) . '</a></p>'
+			. '<p style="margin:0 0 16px;color:#555;font-size:13px;">' . esc_html__( 'Enter your email at the link to update your card or cancel.', 'xtra' ) . '</p>';
+	}
+
+	/**
 	 * Checkout received — cells are pending.
 	 *
 	 * @param array<int, object> $rows Rows.
@@ -188,10 +229,7 @@ class Xtra_Mail {
 			$ctx['org']
 		);
 		$portal_block = $portal_url !== ''
-			? sprintf(
-				"To update your payment details or cancel (effective at the end of the calendar month), use this customer portal:\n%s\n\n",
-				$portal_url
-			)
+			? self::manage_block_text( $portal_url ) . __( 'Cancelling takes effect at the end of the calendar month.', 'xtra' ) . "\n\n"
 			: '';
 		$body = sprintf(
 			"Hello %s,\n\nYour sponsorship is confirmed. You are funding the following hours every week:\n\n%s\n\nMonthly amount: %s AUD\n\n%sThank you for supporting this work.\n\n%s\n",
@@ -224,13 +262,14 @@ class Xtra_Mail {
 			$ctx['org']
 		);
 		$body = sprintf(
-			"Hello %s,\n\nYour monthly sponsorship of the %s at %s has been scheduled to end on %s.\n\nUntil then you continue to fund:\n\n%s\n\nMonthly amount until then: %s AUD\n\nThe hours will become available for others after that date.\n\n%s\n",
+			"Hello %s,\n\nYour monthly sponsorship of the %s at %s has been scheduled to end on %s.\n\nUntil then you continue to fund:\n\n%s\n\nMonthly amount until then: %s AUD\n\nThe hours will become available for others after that date.\n\n%s%s\n",
 			$first->donor_name !== '' ? $first->donor_name : __( 'there', 'xtra' ),
 			$ctx['role'],
 			$ctx['org'],
 			$date,
 			self::hours_list( $rows ),
 			Xtra_Plugin::format_aud( self::monthly_total( $rows ) ),
+			self::manage_block_text( Xtra_Stripe::manage_url( self::customer_id_from( $rows ) ) ),
 			$ctx['org']
 		);
 		self::send( (string) $first->donor_email, $subject, $body );
@@ -253,11 +292,12 @@ class Xtra_Mail {
 			$ctx['org']
 		);
 		$body = sprintf(
-			"Hello %s,\n\nThe following hours of the %s at %s are no longer sponsored and are available again:\n\n%s\n\nThank you for the support you have already given.\n\n%s\n",
+			"Hello %s,\n\nThe following hours of the %s at %s are no longer sponsored and are available again:\n\n%s\n\nThank you for the support you have already given.\n\n%s%s\n",
 			$first->donor_name !== '' ? $first->donor_name : __( 'there', 'xtra' ),
 			$ctx['role'],
 			$ctx['org'],
 			self::hours_list( $rows ),
+			self::manage_block_text( Xtra_Stripe::manage_url( self::customer_id_from( $rows ) ) ),
 			$ctx['org']
 		);
 		self::send( (string) $first->donor_email, $subject, $body );
@@ -292,11 +332,12 @@ class Xtra_Mail {
 			$ctx['org']
 		);
 		$body = sprintf(
-			"Hello %s,\n\nThe %s hour you sponsor at %s is starting now (%s).\n\nThank you for supporting this work.\n\n%s\n",
+			"Hello %s,\n\nThe %s hour you sponsor at %s is starting now (%s).\n\nThank you for supporting this work.\n\n%s%s\n",
 			$name,
 			$ctx['role'],
 			$ctx['org'],
 			$when,
+			self::manage_block_text( Xtra_Stripe::manage_url( self::customer_id_from( array( $row ) ) ) ),
 			$ctx['org']
 		);
 		return self::send( $email, $subject, $body );
@@ -321,8 +362,9 @@ class Xtra_Mail {
 			(string) $payment->receipt_number,
 			$issuer['name'] !== '' ? $issuer['name'] : get_bloginfo( 'name' )
 		);
-		$plain = Xtra_Receipts::payment_receipt_body( $payment );
-		$html  = Xtra_Receipts::payment_receipt_html( $payment );
+		$manage = Xtra_Stripe::manage_url( self::customer_id_from( array( $payment ) ) );
+		$plain  = Xtra_Receipts::payment_receipt_body( $payment, $manage );
+		$html   = Xtra_Receipts::payment_receipt_html( $payment, $manage );
 		return self::send_html(
 			(string) $payment->donor_email,
 			$subject,
@@ -360,11 +402,12 @@ class Xtra_Mail {
 			$reloaded = Xtra_Db::get_payment( (int) $payment->id );
 			$fresh[]  = $reloaded ? $reloaded : $payment;
 		}
+		$manage = Xtra_Stripe::manage_url( self::customer_id_from( $fresh ) );
 		return self::send_html(
 			$donor_email,
 			self::annual_summary_subject( $fy ),
-			Xtra_Receipts::annual_summary_html( $fy, $donor_name, $donor_email, $fresh ),
-			Xtra_Receipts::annual_summary_body( $fy, $donor_name, $donor_email, $fresh )
+			Xtra_Receipts::annual_summary_html( $fy, $donor_name, $donor_email, $fresh, $manage ),
+			Xtra_Receipts::annual_summary_body( $fy, $donor_name, $donor_email, $fresh, $manage )
 		);
 	}
 }
